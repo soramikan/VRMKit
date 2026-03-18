@@ -10,6 +10,7 @@ import SwiftUI
 import RealityKit
 internal import VRMRealityKit
 internal import Combine
+internal import VRMKit
 
 struct ContentView: View {
     @State private var viewModel = ContentViewModel()
@@ -73,19 +74,27 @@ final class ContentViewModel {
             
             // Adjust pose
             let neck = vrmEntity.humanoid.node(for: .neck)
-            let leftShoulder = vrmEntity.humanoid.node(for: .leftShoulder) ?? vrmEntity.humanoid.node(for: .leftUpperArm)
-            let rightShoulder = vrmEntity.humanoid.node(for: .rightShoulder) ?? vrmEntity.humanoid.node(for: .rightUpperArm)
+            let leftArm: Entity?
+            let rightArm: Entity?
+            switch vrmEntity.vrm {
+            case .v1:
+                leftArm = vrmEntity.humanoid.node(for: .leftShoulder)
+                rightArm = vrmEntity.humanoid.node(for: .rightShoulder)
+            case .v0:
+                leftArm = vrmEntity.humanoid.node(for: .leftUpperArm)
+                rightArm = vrmEntity.humanoid.node(for: .rightUpperArm)
+            }
             
             let neckRotation = simd_quatf(angle: 20 * .pi / 180, axis: SIMD3<Float>(0, 0, 1))
-            let shoulderRotation = simd_quatf(angle: 40 * .pi / 180, axis: SIMD3<Float>(0, 0, 1))
+            let armRotation = simd_quatf(angle: 40 * .pi / 180, axis: SIMD3<Float>(0, 0, 1))
             if let neck {
                 neck.transform.rotation = neck.transform.rotation * neckRotation
             }
-            if let leftShoulder {
-                leftShoulder.transform.rotation = leftShoulder.transform.rotation * shoulderRotation
+            if let leftArm {
+                leftArm.transform.rotation = leftArm.transform.rotation * armRotation
             }
-            if let rightShoulder {
-                rightShoulder.transform.rotation = rightShoulder.transform.rotation * shoulderRotation
+            if let rightArm {
+                rightArm.transform.rotation = rightArm.transform.rotation * armRotation
             }
             vrmEntity.setBlendShape(value: 1.0, for: .custom("><"))
             
