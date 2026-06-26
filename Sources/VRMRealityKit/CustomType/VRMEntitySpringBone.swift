@@ -16,7 +16,7 @@ final class VRMEntitySpringBone {
             guard let tail else { return head }
             let segment = tail - head
             let lengthSquared = segment.length_squared
-            guard lengthSquared > 0 else { return head }
+            guard lengthSquared > Float.ulpOfOne else { return head }
             let t = max(0, min(1, simd_dot(point - head, segment) / lengthSquared))
             return head + segment * t
         }
@@ -261,8 +261,9 @@ extension VRMEntitySpringBone {
             for collider in colliders {
                 let colliderPosition = collider.closestPoint(to: nextTail)
                 let r = radius + collider.radius
-                if (nextTail - colliderPosition).length_squared <= (r * r) {
-                    let normal = (nextTail - colliderPosition).normalized
+                let delta = nextTail - colliderPosition
+                if delta.length_squared <= (r * r) {
+                    let normal = delta.length_squared > Float.ulpOfOne ? delta.normalized : SIMD3<Float>(0, 1, 0)
                     let posFromCollider = colliderPosition + normal * (radius + collider.radius)
                     nextTail = node.utx.position + (posFromCollider - node.utx.position).normalized * length
                 }

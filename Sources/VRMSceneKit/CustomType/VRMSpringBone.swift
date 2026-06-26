@@ -15,7 +15,7 @@ final class VRMSpringBone {
             guard let tail else { return head }
             let segment = tail - head
             let lengthSquared = segment.length_squared
-            guard lengthSquared > 0 else { return head }
+            guard lengthSquared > Float.ulpOfOne else { return head }
             let t = max(0, min(1, simd_dot(point - head, segment) / lengthSquared))
             return head + segment * t
         }
@@ -139,7 +139,8 @@ final class VRMSpringBone {
     
     private func setupRecursive(_ center: SCNNode?, _ parent: SCNNode) {
         if parent.utx.childCount == 0 {
-            let delta = parent.utx.position - parent.parent!.utx.position
+            guard let parentNode = parent.parent else { return }
+            let delta = parent.utx.position - parentNode.utx.position
             let direction = delta.length_squared > Float.ulpOfOne ? delta.normalized : SIMD3<Float>(0, -1, 0)
             let childPosition = parent.utx.position + direction * 0.07
             let logic = VRMSpringBoneLogic(center: center, node: parent, localChildPosition: parent.utx.worldToLocalMatrix.multiplyPoint(childPosition))
@@ -284,9 +285,10 @@ extension VRMSpringBone {
             for collider in colliders {
                 let colliderPosition = collider.closestPoint(to: nextTail)
                 let r = self.radius + collider.radius
-                if (nextTail - colliderPosition).length_squared <= (r * r) {
+                let delta = nextTail - colliderPosition
+                if delta.length_squared <= (r * r) {
                     // ヒット。Colliderの半径方向に押し出す
-                    let normal = (nextTail - colliderPosition).normalized
+                    let normal = delta.length_squared > Float.ulpOfOne ? delta.normalized : SIMD3<Float>(0, 1, 0)
                     let posFromCollider = colliderPosition + normal * (self.radius + collider.radius)
                     // 長さをboneLengthに強制
                     nextTail = self.node.utx.position + (posFromCollider - self.node.utx.position).normalized * self.length

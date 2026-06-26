@@ -101,10 +101,10 @@ public final class VRMEntity {
                                                  isBinary: expressionClip.expression.isBinary ?? false)
                 expressionClips[runtimeClip.key] = runtimeClip
 
-                let colorBindings: [MaterialColorBinding] = try expressionClip.expression.materialColorBinds?
+                let colorBindings: [MaterialColorBinding] = expressionClip.expression.materialColorBinds?
                     .compactMap { bind in
                         guard bind.targetValue.count >= 3 else { return nil }
-                        let material = try loader.material(withMaterialIndex: bind.material)
+                        guard let material = try? loader.material(withMaterialIndex: bind.material) else { return nil }
                         return MaterialColorBinding(materialIndex: bind.material,
                                                     type: bind.type,
                                                     targetValue: SIMD4<Float>(bind.targetValue, defaultAlpha: 1.0),
@@ -114,9 +114,9 @@ public final class VRMEntity {
                     materialColorClips[runtimeClip.key] = colorBindings
                 }
 
-                let transformBindings: [TextureTransformBinding] = try expressionClip.expression.textureTransformBinds?
+                let transformBindings: [TextureTransformBinding] = expressionClip.expression.textureTransformBinds?
                     .compactMap { bind in
-                        let material = try loader.material(withMaterialIndex: bind.material)
+                        guard let material = try? loader.material(withMaterialIndex: bind.material) else { return nil }
                         let base = material.currentTextureTransform
                         return TextureTransformBinding(materialIndex: bind.material,
                                                        baseScale: base.scale,
