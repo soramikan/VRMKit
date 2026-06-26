@@ -43,33 +43,9 @@ open class VRMSceneLoader {
     }
 
     public func loadThumbnail() throws -> VRMImage {
-        switch vrm {
-        case .v0(let vrm0):
-            guard let textureIndex = vrm0.meta.texture, textureIndex >= 0 else {
-                throw VRMError.thumbnailNotFound
-            }
-            let textures = try gltf.load(\.textures)
-            guard textures.indices.contains(textureIndex) else {
-                throw VRMError.thumbnailNotFound
-            }
-            let texture = textures[textureIndex]
-            let images = try gltf.load(\.images)
-            guard images.indices.contains(texture.source) else {
-                throw VRMError.thumbnailNotFound
-            }
-            if let cache = try sceneData.load(\.images, index: texture.source) { return cache }
-            return try image(withImageIndex: texture.source)
-        case .v1(let vrm1):
-            guard let imageIndex = vrm1.meta.thumbnailImage, imageIndex >= 0 else {
-                throw VRMError.thumbnailNotFound
-            }
-            let images = try gltf.load(\.images)
-            guard images.indices.contains(imageIndex) else {
-                throw VRMError.thumbnailNotFound
-            }
-            if let cache = try sceneData.load(\.images, index: imageIndex) { return cache }
-            return try image(withImageIndex: imageIndex)
-        }
+        let imageIndex = try vrm.thumbnailImageIndex
+        if let cache = try sceneData.load(\.images, index: imageIndex) { return cache }
+        return try image(withImageIndex: imageIndex)
     }
 
     func node(withNodeIndex index: Int) throws -> SCNNode {

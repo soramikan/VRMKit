@@ -84,7 +84,7 @@ open class VRMNode: SCNNode {
                         guard let material = try? loader.material(withMaterialIndex: bind.material) else { return nil }
                         return MaterialColorBinding(material: material,
                                                     type: bind.type,
-                                                    targetValue: SIMD4<Float>(bind.targetValue, defaultAlpha: 1.0),
+                                                    targetValue: SIMD4<Float>(bind.targetValue, default: 1.0),
                                                     baseValue: material.currentColor(for: bind.type))
                     } ?? []
                 if !colorBindings.isEmpty {
@@ -98,8 +98,8 @@ open class VRMNode: SCNNode {
                         return TextureTransformBinding(material: material,
                                                        baseScale: base.scale,
                                                        baseOffset: base.offset,
-                                                       targetScale: SIMD2<Float>(bind.scale, defaultValue: 1.0),
-                                                       targetOffset: SIMD2<Float>(bind.offset, defaultValue: 0.0))
+                                                       targetScale: SIMD2<Float>(bind.scale, default: 1.0),
+                                                       targetOffset: SIMD2<Float>(bind.offset, default: 0.0))
                     } ?? []
                 if !transformBindings.isEmpty {
                     textureTransformClips[runtimeClip.key] = transformBindings
@@ -450,7 +450,7 @@ private enum FirstPersonAnnotationType {
     }
 
     init?(vrm0Flag: String) {
-        switch vrm0Flag.replacingOccurrences(of: "_", with: "").lowercased() {
+        switch vrm0Flag.lowercased() {
         case "auto":
             self = .auto
         case "both":
@@ -540,48 +540,6 @@ private extension SCNMaterialProperty {
         let transform = contentsTransform
         return (SIMD2<Float>(Float(transform.m11), Float(transform.m22)),
                 SIMD2<Float>(Float(transform.m41), Float(transform.m42)))
-    }
-}
-
-private extension VRMColor {
-    convenience init(simd color: SIMD4<Float>) {
-        self.init(red: CGFloat(color.x),
-                  green: CGFloat(color.y),
-                  blue: CGFloat(color.z),
-                  alpha: CGFloat(color.w))
-    }
-
-    var simd: SIMD4<Float> {
-        #if os(macOS)
-        let color = usingColorSpace(.deviceRGB) ?? self
-        return SIMD4<Float>(Float(color.redComponent),
-                            Float(color.greenComponent),
-                            Float(color.blueComponent),
-                            Float(color.alphaComponent))
-        #else
-        var red: CGFloat = 0
-        var green: CGFloat = 0
-        var blue: CGFloat = 0
-        var alpha: CGFloat = 0
-        getRed(&red, green: &green, blue: &blue, alpha: &alpha)
-        return SIMD4<Float>(Float(red), Float(green), Float(blue), Float(alpha))
-        #endif
-    }
-}
-
-private extension SIMD4 where Scalar == Float {
-    init(_ values: [Double], defaultAlpha: Float) {
-        self.init(Float(values[safe: 0] ?? 0),
-                  Float(values[safe: 1] ?? 0),
-                  Float(values[safe: 2] ?? 0),
-                  Float(values[safe: 3] ?? Double(defaultAlpha)))
-    }
-}
-
-private extension SIMD2 where Scalar == Float {
-    init(_ values: [Double]?, defaultValue: Float) {
-        self.init(Float(values?[safe: 0] ?? Double(defaultValue)),
-                  Float(values?[safe: 1] ?? Double(defaultValue)))
     }
 }
 

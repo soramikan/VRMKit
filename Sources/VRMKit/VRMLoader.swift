@@ -32,22 +32,11 @@ open class VRMLoader {
     }
 
     open func loadThumbnail(from vrm0: VRM0) throws -> VRMImage {
-        guard let textureIndex = vrm0.meta.texture, textureIndex >= 0 else {
-            throw VRMError.thumbnailNotFound
-        }
-        let textures = try vrm0.gltf.jsonData.load(\.textures)
-        guard textures.indices.contains(textureIndex) else {
-            throw VRMError.thumbnailNotFound
-        }
-        let texture = textures[textureIndex]
-        return try loadImage(from: vrm0.gltf, at: texture.source)
+        try loadImage(from: vrm0.gltf, at: vrm0.thumbnailImageIndex)
     }
 
     open func loadThumbnail(from vrm1: VRM1) throws -> VRMImage {
-        guard let imageIndex = vrm1.meta.thumbnailImage, imageIndex >= 0 else {
-            throw VRMError.thumbnailNotFound
-        }
-        return try loadImage(from: vrm1.gltf, at: imageIndex)
+        try loadImage(from: vrm1.gltf, at: vrm1.thumbnailImageIndex)
     }
 
     private func loadImage(from gltf: BinaryGLTF, at index: Int, relativeTo rootDirectory: URL? = nil) throws -> VRMImage {

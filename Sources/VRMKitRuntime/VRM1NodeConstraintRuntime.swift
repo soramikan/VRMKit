@@ -2,33 +2,18 @@ import simd
 import VRMKit
 
 package enum VRMNodeConstraintDescriptor {
-    case roll(source: Int, axis: RollAxis, weight: Float)
-    case aim(source: Int, axis: AimAxis, weight: Float)
+    case roll(source: Int, axis: SIMD3<Float>, weight: Float)
+    case aim(source: Int, axis: SIMD3<Float>, weight: Float)
     case rotation(source: Int, weight: Float)
-
-    package enum RollAxis {
-        case x
-        case y
-        case z
-    }
-
-    package enum AimAxis {
-        case positiveX
-        case negativeX
-        case positiveY
-        case negativeY
-        case positiveZ
-        case negativeZ
-    }
 
     package init?(_ constraint: GLTF.Node.NodeExtensions.NodeConstraint.Constraint) {
         if let roll = constraint.roll {
             self = .roll(source: roll.source,
-                         axis: RollAxis(roll.rollAxis),
+                         axis: roll.rollAxis.vector,
                          weight: Float(roll.weight ?? 1.0))
         } else if let aim = constraint.aim {
             self = .aim(source: aim.source,
-                        axis: AimAxis(aim.aimAxis),
+                        axis: aim.aimAxis.vector,
                         weight: Float(aim.weight ?? 1.0))
         } else if let rotation = constraint.rotation {
             self = .rotation(source: rotation.source,
@@ -58,13 +43,13 @@ package enum VRMNodeConstraintRuntime {
                                  destinationWorldPosition: SIMD3<Float>) -> simd_quatf {
         switch descriptor {
         case .roll(_, let axis, let weight):
-            return evaluateRoll(axis: axis.vector,
+            return evaluateRoll(axis: axis,
                                 weight: weight,
                                 sourceRestRotation: sourceRestRotation,
                                 sourceLocalRotation: sourceLocalRotation,
                                 destinationRestRotation: destinationRestRotation)
         case .aim(_, let axis, let weight):
-            return evaluateAim(axis: axis.vector,
+            return evaluateAim(axis: axis,
                                weight: weight,
                                sourceWorldPosition: sourceWorldPosition,
                                destinationRestRotation: destinationRestRotation,
@@ -156,15 +141,7 @@ package enum VRMNodeConstraintRuntime {
 
 }
 
-private extension VRMNodeConstraintDescriptor.RollAxis {
-    init(_ axis: GLTF.Node.NodeExtensions.NodeConstraint.Constraint.RollConstraint.RollAxis) {
-        switch axis {
-        case .x: self = .x
-        case .y: self = .y
-        case .z: self = .z
-        }
-    }
-
+private extension GLTF.Node.NodeExtensions.NodeConstraint.Constraint.RollConstraint.RollAxis {
     var vector: SIMD3<Float> {
         switch self {
         case .x: return SIMD3<Float>(1, 0, 0)
@@ -174,18 +151,7 @@ private extension VRMNodeConstraintDescriptor.RollAxis {
     }
 }
 
-private extension VRMNodeConstraintDescriptor.AimAxis {
-    init(_ axis: GLTF.Node.NodeExtensions.NodeConstraint.Constraint.AimConstraint.AimAxis) {
-        switch axis {
-        case .positiveX: self = .positiveX
-        case .negativeX: self = .negativeX
-        case .positiveY: self = .positiveY
-        case .negativeY: self = .negativeY
-        case .positiveZ: self = .positiveZ
-        case .negativeZ: self = .negativeZ
-        }
-    }
-
+private extension GLTF.Node.NodeExtensions.NodeConstraint.Constraint.AimConstraint.AimAxis {
     var vector: SIMD3<Float> {
         switch self {
         case .positiveX: return SIMD3<Float>(1, 0, 0)

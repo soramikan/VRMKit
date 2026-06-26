@@ -44,12 +44,12 @@ final class VRMSpringBoneColliderGroup {
         init(collider: VRM1.SpringBone.Collider, loader: VRMSceneLoader) throws {
             self.node = try loader.node(withNodeIndex: collider.node)
             if let sphere = collider.shape.sphere {
-                self.offset = SIMD3<Float>(sphere.offset, defaultValue: .zero)
+                self.offset = SIMD3<Float>(sphere.offset, default: .zero)
                 self.tail = nil
                 self.radius = Float(sphere.radius)
             } else if let capsule = collider.shape.capsule {
-                self.offset = SIMD3<Float>(capsule.offset, defaultValue: .zero)
-                self.tail = SIMD3<Float>(capsule.tail, defaultValue: .zero)
+                self.offset = SIMD3<Float>(capsule.offset, default: .zero)
+                self.tail = SIMD3<Float>(capsule.tail, default: .zero)
                 self.radius = Float(capsule.radius)
             } else {
                 self.offset = .zero
@@ -57,13 +57,5 @@ final class VRMSpringBoneColliderGroup {
                 self.radius = 0
             }
         }
-    }
-}
-
-private extension SIMD3 where Scalar == Float {
-    init(_ values: [Double], defaultValue: SIMD3<Float>) {
-        self.init(Float(values[safe: 0] ?? Double(defaultValue.x)),
-                  Float(values[safe: 1] ?? Double(defaultValue.y)),
-                  Float(values[safe: 2] ?? Double(defaultValue.z)))
     }
 }

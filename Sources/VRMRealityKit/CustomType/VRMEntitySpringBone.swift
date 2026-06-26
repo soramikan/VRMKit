@@ -44,7 +44,7 @@ final class VRMEntitySpringBone {
         init(joint: VRM1.SpringBone.Spring.Joint) {
             self.init(stiffnessForce: Float(joint.stiffness ?? 1.0),
                       gravityPower: Float(joint.gravityPower ?? 0.0),
-                      gravityDir: SIMD3<Float>(joint.gravityDir, defaultValue: SIMD3<Float>(0, -1, 0)),
+                      gravityDir: SIMD3<Float>(joint.gravityDir, default: SIMD3<Float>(0, -1, 0)),
                       dragForce: Float(joint.dragForce ?? 0.5),
                       hitRadius: Float(joint.hitRadius ?? 0.02))
         }
@@ -270,13 +270,6 @@ extension VRMEntitySpringBone {
             }
             return nextTail
         }
-    }
-}
-private extension SIMD3 where Scalar == Float {
-    init(_ values: [Double]?, defaultValue: SIMD3<Float>) {
-        self.init(Float(values?[safe: 0] ?? Double(defaultValue.x)),
-                  Float(values?[safe: 1] ?? Double(defaultValue.y)),
-                  Float(values?[safe: 2] ?? Double(defaultValue.z)))
     }
 }
 #endif
