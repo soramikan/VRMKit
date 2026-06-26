@@ -2,26 +2,29 @@ import VRMKit
 
 package extension VRM1.Expressions {
     var runtimeClips: [(name: String, preset: ExpressionPreset?, expression: VRM1.Expressions.Expression)] {
-        var clips: [(String, ExpressionPreset?, VRM1.Expressions.Expression)] = [
-            ("Happy", .happy, preset.happy),
-            ("Angry", .angry, preset.angry),
-            ("Sad", .sad, preset.sad),
-            ("Relaxed", .relaxed, preset.relaxed),
-            ("Surprised", .surprised, preset.surprised),
-            ("Aa", .aa, preset.aa),
-            ("Ih", .ih, preset.ih),
-            ("Ou", .ou, preset.ou),
-            ("Ee", .ee, preset.ee),
-            ("Oh", .oh, preset.oh),
-            ("Blink", .blink, preset.blink),
-            ("BlinkLeft", .blinkLeft, preset.blinkLeft),
-            ("BlinkRight", .blinkRight, preset.blinkRight),
-            ("LookUp", .lookUp, preset.lookUp),
-            ("LookDown", .lookDown, preset.lookDown),
-            ("LookLeft", .lookLeft, preset.lookLeft),
-            ("LookRight", .lookRight, preset.lookRight),
-            ("Neutral", .neutral, preset.neutral)
+        let presetClips: [(ExpressionPreset, VRM1.Expressions.Expression)] = [
+            (.happy, preset.happy),
+            (.angry, preset.angry),
+            (.sad, preset.sad),
+            (.relaxed, preset.relaxed),
+            (.surprised, preset.surprised),
+            (.aa, preset.aa),
+            (.ih, preset.ih),
+            (.ou, preset.ou),
+            (.ee, preset.ee),
+            (.oh, preset.oh),
+            (.blink, preset.blink),
+            (.blinkLeft, preset.blinkLeft),
+            (.blinkRight, preset.blinkRight),
+            (.lookUp, preset.lookUp),
+            (.lookDown, preset.lookDown),
+            (.lookLeft, preset.lookLeft),
+            (.lookRight, preset.lookRight),
+            (.neutral, preset.neutral)
         ]
+        var clips: [(String, ExpressionPreset?, VRM1.Expressions.Expression)] = presetClips.map { expressionPreset, expression in
+            (expressionPreset.rawValue, expressionPreset, expression)
+        }
 
         guard let customMap = custom?.value as? [String: Any] else {
             return clips

@@ -122,7 +122,7 @@ package enum VRMNodeConstraintRuntime {
     private static func slerpRest(_ rest: simd_quatf,
                                   _ constrained: simd_quatf,
                                   weight: Float) -> simd_quatf {
-        simd_slerp(normalized(rest), normalized(constrained), clamped(weight))
+        simd_slerp(normalized(rest), normalized(constrained), simd_clamp(weight, 0.0, 1.0))
     }
 
     private static func fromToRotation(from rawFrom: SIMD3<Float>,
@@ -134,7 +134,7 @@ package enum VRMNodeConstraintRuntime {
 
         let from = simd_normalize(rawFrom)
         let to = simd_normalize(rawTo)
-        let dotValue = clamped(simd_dot(from, to), min: -1.0, max: 1.0)
+        let dotValue = simd_clamp(simd_dot(from, to), -1.0, 1.0)
         if dotValue > 1.0 - 0.000001 {
             return quat_identity_float
         }
@@ -154,11 +154,6 @@ package enum VRMNodeConstraintRuntime {
         return simd_quatf(vector: quaternion.vector / sqrt(lengthSquared))
     }
 
-    private static func clamped(_ value: Float,
-                                min minimum: Float = 0.0,
-                                max maximum: Float = 1.0) -> Float {
-        Swift.min(Swift.max(value, minimum), maximum)
-    }
 }
 
 private extension VRMNodeConstraintDescriptor.RollAxis {

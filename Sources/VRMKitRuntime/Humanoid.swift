@@ -111,7 +111,9 @@ public final class Humanoid<Node> {
         case rightEye
         case jaw
         case leftThumbProximal
+        /// VRM 1.0
         case leftThumbMetacarpal
+        /// VRM 0.x
         case leftThumbIntermediate
         case leftThumbDistal
         case leftIndexProximal
@@ -127,7 +129,9 @@ public final class Humanoid<Node> {
         case leftLittleIntermediate
         case leftLittleDistal
         case rightThumbProximal
+        /// VRM 1.0
         case rightThumbMetacarpal
+        /// VRM 0.x
         case rightThumbIntermediate
         case rightThumbDistal
         case rightIndexProximal
