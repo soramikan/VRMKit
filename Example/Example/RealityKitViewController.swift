@@ -11,11 +11,13 @@ final class RealityKitViewController: UIViewController, UIGestureRecognizerDeleg
     private var loadedEntity: VRMEntity?
     private var cameraAnchor: AnchorEntity?
     private var cameraEntity: PerspectiveCamera?
+    private var expressionSegmentedControl: UISegmentedControl?
     private var orbitYaw: Float = 0
     private var orbitPitch: Float = -0.1
     private var orbitDistance: Float = 2
     private var orbitTarget = SIMD3<Float>(0, 0.8, 0)
-    private var currentExpression: Expression = .neutral
+    private var currentModel: VRMExampleModel = .alicia
+    private var currentExpression: ExampleExpression = .neutral
 
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -52,12 +54,13 @@ final class RealityKitViewController: UIViewController, UIGestureRecognizerDeleg
         segmentedControl.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(segmentedControl)
 
-        let expressionItems = Expression.allCases.map { $0.displayName }
+        let expressionItems = ExampleExpression.allCases.map { $0.displayName(for: currentModel) }
         let expressionSegmentedControl = UISegmentedControl(items: expressionItems)
         expressionSegmentedControl.selectedSegmentIndex = 0
         expressionSegmentedControl.addTarget(self, action: #selector(expressionSegmentChanged(_:)), for: .valueChanged)
         expressionSegmentedControl.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(expressionSegmentedControl)
+        self.expressionSegmentedControl = expressionSegmentedControl
         
         NSLayoutConstraint.activate([
             segmentedControl.centerXAnchor.constraint(equalTo: view.centerXAnchor),
@@ -73,14 +76,17 @@ final class RealityKitViewController: UIViewController, UIGestureRecognizerDeleg
     }
 
     @objc private func expressionSegmentChanged(_ sender: UISegmentedControl) {
-        let expression = Expression.allCases[sender.selectedSegmentIndex]
-        loadedEntity?.setBlendShape(value: 0.0, for: .preset(currentExpression.preset))
+        let expression = ExampleExpression.allCases[sender.selectedSegmentIndex]
+        loadedEntity?.setExampleExpression(currentExpression, value: 0.0)
         currentExpression = expression
-        loadedEntity?.setBlendShape(value: 1.0, for: .preset(currentExpression.preset))
+        loadedEntity?.setExampleExpression(currentExpression, value: 1.0)
     }
 
     private func loadVRM(model: VRMExampleModel) {
         guard let arView = arView else { return }
+
+        currentModel = model
+        updateExpressionLabels()
 
         if let loadedEntity = loadedEntity {
             loadedEntity.entity.removeFromParent()
@@ -122,7 +128,7 @@ final class RealityKitViewController: UIViewController, UIGestureRecognizerDeleg
             if let rightArm {
                 rightArm.transform.rotation = rightArm.transform.rotation * armRotation
             }
-            vrmEntity.setBlendShape(value: 1.0, for: .preset(currentExpression.preset))
+            vrmEntity.setExampleExpression(currentExpression, value: 1.0)
             
             loadedEntity = vrmEntity
             
@@ -151,6 +157,18 @@ final class RealityKitViewController: UIViewController, UIGestureRecognizerDeleg
         } catch {
             print(error)
         }
+    }
+
+    private func updateExpressionLabels() {
+        guard let expressionSegmentedControl else { return }
+        let selectedIndex = expressionSegmentedControl.selectedSegmentIndex
+        expressionSegmentedControl.removeAllSegments()
+        for (index, expression) in ExampleExpression.allCases.enumerated() {
+            expressionSegmentedControl.insertSegment(withTitle: expression.displayName(for: currentModel),
+                                                     at: index,
+                                                     animated: false)
+        }
+        expressionSegmentedControl.selectedSegmentIndex = selectedIndex >= 0 ? selectedIndex : 0
     }
 
     private func setUpCamera() {

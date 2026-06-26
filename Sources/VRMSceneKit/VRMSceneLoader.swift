@@ -32,7 +32,9 @@ open class VRMSceneLoader {
             vrmNode.addChildNode(try self.node(withNodeIndex: node))
         }
         vrmNode.setUpHumanoid(nodes: sceneData.nodes)
-        vrmNode.setUpBlendShapes(meshes: sceneData.meshes)
+        try vrmNode.setUpBlendShapes(nodes: sceneData.nodes, meshes: sceneData.meshes, loader: self)
+        vrmNode.setUpFirstPerson(nodes: sceneData.nodes, meshes: sceneData.meshes)
+        try vrmNode.setUpNodeConstraints(gltfNodes: try gltf.load(\.nodes), loader: self)
         try vrmNode.setUpSpringBones(loader: self)
 
         let scnScene = VRMScene(node: vrmNode)
@@ -41,11 +43,9 @@ open class VRMSceneLoader {
     }
 
     public func loadThumbnail() throws -> VRMImage {
-        guard let textureIndex = vrm.meta.texture, textureIndex >= 0 else {
-            throw VRMError.thumbnailNotFound
-        }
-        if let cache = try sceneData.load(\.images, index: textureIndex) { return cache }
-        return try image(withImageIndex: textureIndex)
+        let imageIndex = try vrm.thumbnailImageIndex
+        if let cache = try sceneData.load(\.images, index: imageIndex) { return cache }
+        return try image(withImageIndex: imageIndex)
     }
 
     func node(withNodeIndex index: Int) throws -> SCNNode {
@@ -122,10 +122,41 @@ open class VRMSceneLoader {
 
     func material(withMaterialIndex index: Int) throws -> SCNMaterial {
         if let cache = try sceneData.load(\.materials, index: index) { return cache }
-        let gltfMaterial = try gltf.load(\.materials)[index]
+        let materials = try gltf.load(\.materials)
+        guard materials.indices.contains(index) else {
+            throw VRMError._dataInconsistent("Material index \(index) out of bounds")
+        }
+        let gltfMaterial = materials[index]
         let material = try SCNMaterial(material: gltfMaterial, loader: self)
         sceneData.materials[index] = material
         return material
+    }
+
+    func vrm0MaterialProperty(named name: String) -> VRM0.MaterialProperty? {
+        guard case .v0(let vrm0) = vrm else { return nil }
+        return vrm0.materialPropertyNameMap[name]
+    }
+
+    func renderQueue(forMaterialNamed name: String?) throws -> Int? {
+        guard let name else { return nil }
+        switch vrm {
+        case .v0(let vrm0):
+            return vrm0.materialPropertyNameMap[name]?.renderQueue
+        case .v1:
+            guard let material = try gltf.load(\.materials).first(where: { $0.name == name }) else {
+                return nil
+            }
+            let baseQueue: Int
+            switch material.alphaMode {
+            case .OPAQUE:
+                baseQueue = 2000
+            case .MASK:
+                baseQueue = 2450
+            case .BLEND:
+                baseQueue = material.extensions?.materialsMToon?.transparentWithZWrite == true ? 2501 : 3000
+            }
+            return baseQueue + (material.extensions?.materialsMToon?.renderQueueOffsetNumber ?? 0)
+        }
     }
 
     func texture(withTextureIndex index: Int) throws -> SCNMaterialProperty {

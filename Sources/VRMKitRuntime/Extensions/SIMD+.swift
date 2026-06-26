@@ -1,6 +1,16 @@
 import simd
 
 package extension SIMD3 where Scalar == Float {
+    init(_ values: [Double]?, `default` defaultValue: SIMD3<Float>) {
+        self.init(Float(values?[safe: 0] ?? Double(defaultValue.x)),
+                  Float(values?[safe: 1] ?? Double(defaultValue.y)),
+                  Float(values?[safe: 2] ?? Double(defaultValue.z)))
+    }
+
+    init(_ values: [Double], `default` defaultValue: SIMD3<Float>) {
+        self.init(Optional(values), default: defaultValue)
+    }
+
     var normalized: SIMD3 {
         simd_normalize(self)
     }
@@ -15,6 +25,22 @@ package extension SIMD3 where Scalar == Float {
 
     mutating func normalize() {
         self = normalized
+    }
+}
+
+package extension SIMD4 where Scalar == Float {
+    init(_ values: [Double], `default` defaultAlpha: Float) {
+        self.init(Float(values[safe: 0] ?? 0),
+                  Float(values[safe: 1] ?? 0),
+                  Float(values[safe: 2] ?? 0),
+                  Float(values[safe: 3] ?? Double(defaultAlpha)))
+    }
+}
+
+package extension SIMD2 where Scalar == Float {
+    init(_ values: [Double]?, `default` defaultValue: Float) {
+        self.init(Float(values?[safe: 0] ?? Double(defaultValue)),
+                  Float(values?[safe: 1] ?? Double(defaultValue)))
     }
 }
 

@@ -2,6 +2,7 @@
 import CoreGraphics
 import Foundation
 import RealityKit
+import simd
 import VRMKit
 import VRMKitRuntime
 
@@ -14,6 +15,11 @@ struct BlendShapeNormalTangentComponent: Component {
 }
 
 @available(iOS 18.0, macOS 15.0, visionOS 2.0, *)
+struct VRMMaterialIndexComponent: Component {
+    let materialIndex: Int
+}
+
+@available(iOS 18.0, macOS 15.0, visionOS 2.0, *)
 @MainActor
 public final class VRMEntity {
     public let vrm: VRM
@@ -23,8 +29,14 @@ public final class VRMEntity {
     private let enableNormalTangentBlendShape = false
 
     var blendShapeClips: [BlendShapeKey: BlendShapeClip] = [:]
+    var expressionClips: [ExpressionKey: ExpressionClip] = [:]
+    private var materialColorClips: [ExpressionKey: [MaterialColorBinding]] = [:]
+    private var textureTransformClips: [ExpressionKey: [TextureTransformBinding]] = [:]
+    private var firstPersonAnnotations: [FirstPersonAnnotation] = []
     private var skinBindings: [SkinBinding] = []
+    private var modelEntitiesByMaterialIndex: [Int: [ModelEntity]] = [:]
     private var springBones: [VRMEntitySpringBone] = []
+    private var nodeConstraints: [NodeConstraintBinding] = []
 
     struct SkinBinding {
         let modelEntity: ModelEntity
@@ -38,49 +50,199 @@ public final class VRMEntity {
     }
 
     func setUpHumanoid(nodes: [Entity?]) {
-        humanoid.setUp(humanoid: vrm.humanoid, nodes: nodes)
+        switch vrm {
+        case .v0:
+            humanoid.setUp(humanoid: vrm.humanoid, nodes: nodes)
+        case .v1(let vrm1):
+            humanoid.setUp(humanoid: vrm1.humanoid, nodes: nodes)
+        }
     }
 
-    func setUpBlendShapes(meshes: [Entity?]) {
-        blendShapeClips = vrm.blendShapeMaster.blendShapeGroups
-            .map { group in
-                let blendShapeBinding: [BlendShapeBinding] = group.binds?
-                    .compactMap {
-                        guard let mesh = meshes[$0.mesh] else {
+    func setUpBlendShapes(nodes: [Entity?], meshes: [Entity?], loader: VRMEntityLoader) throws {
+        blendShapeClips = [:]
+        expressionClips = [:]
+        materialColorClips = [:]
+        textureTransformClips = [:]
+
+        switch vrm {
+        case .v0:
+            blendShapeClips = vrm.blendShapeMaster.blendShapeGroups
+                .map { group in
+                    let blendShapeBinding: [BlendShapeBinding] = group.binds?
+                        .compactMap {
+                            guard meshes.indices.contains($0.mesh),
+                                  let mesh = meshes[$0.mesh] else {
+                                return nil
+                            }
+                            return BlendShapeBinding(mesh: mesh, index: $0.index, weight: $0.weight)
+                        } ?? []
+                    return BlendShapeClip(name: group.name,
+                                          preset: BlendShapePreset(name: group.presetName),
+                                          values: blendShapeBinding,
+                                          isBinary: group.isBinary)
+                }
+                .reduce(into: [:]) { result, clip in
+                    result[clip.key] = clip
+                }
+        case .v1(let vrm1):
+            guard let expressions = vrm1.expressions else { return }
+            for expressionClip in expressions.runtimeClips {
+                let morphBindings: [BlendShapeBinding] = expressionClip.expression.morphTargetBinds?
+                    .compactMap { bind in
+                        guard nodes.indices.contains(bind.node),
+                              let node = nodes[bind.node] else {
                             return nil
                         }
-                        return BlendShapeBinding(mesh: mesh, index: $0.index, weight: $0.weight)
+                        return BlendShapeBinding(mesh: node, index: bind.index, weight: bind.weight * 100.0)
                     } ?? []
-                return BlendShapeClip(name: group.name,
-                                      preset: BlendShapePreset(name: group.presetName),
-                                      values: blendShapeBinding,
-                                      isBinary: group.isBinary)
+                let runtimeClip = ExpressionClip(name: expressionClip.name,
+                                                 preset: expressionClip.preset,
+                                                 values: morphBindings,
+                                                 isBinary: expressionClip.expression.isBinary ?? false)
+                expressionClips[runtimeClip.key] = runtimeClip
+
+                let colorBindings: [MaterialColorBinding] = expressionClip.expression.materialColorBinds?
+                    .compactMap { bind in
+                        guard bind.targetValue.count >= 3 else { return nil }
+                        guard let material = try? loader.material(withMaterialIndex: bind.material) else { return nil }
+                        return MaterialColorBinding(materialIndex: bind.material,
+                                                    type: bind.type,
+                                                    targetValue: SIMD4<Float>(bind.targetValue, default: 1.0),
+                                                    baseValue: material.currentColor(for: bind.type))
+                    } ?? []
+                if !colorBindings.isEmpty {
+                    materialColorClips[runtimeClip.key] = colorBindings
+                }
+
+                let transformBindings: [TextureTransformBinding] = expressionClip.expression.textureTransformBinds?
+                    .compactMap { bind in
+                        guard let material = try? loader.material(withMaterialIndex: bind.material) else { return nil }
+                        let base = material.currentTextureTransform
+                        return TextureTransformBinding(materialIndex: bind.material,
+                                                       baseScale: base.scale,
+                                                       baseOffset: base.offset,
+                                                       targetScale: SIMD2<Float>(bind.scale, default: 1.0),
+                                                       targetOffset: SIMD2<Float>(bind.offset, default: 0.0))
+                    } ?? []
+                if !transformBindings.isEmpty {
+                    textureTransformClips[runtimeClip.key] = transformBindings
+                }
             }
-            .reduce(into: [:]) { result, clip in
-                result[clip.key] = clip
+        }
+    }
+
+    func setUpFirstPerson(nodes: [Entity?], meshes: [Entity?]) {
+        switch vrm {
+        case .v0:
+            firstPersonAnnotations = vrm.firstPerson.meshAnnotations.compactMap { annotation in
+                guard meshes.indices.contains(annotation.mesh),
+                      let mesh = meshes[annotation.mesh],
+                      let type = FirstPersonAnnotationType(vrm0Flag: annotation.firstPersonFlag) else {
+                    return nil
+                }
+                return FirstPersonAnnotation(entity: mesh,
+                                             type: type,
+                                             hidesAutoInFirstPerson: false)
             }
+        case .v1(let vrm1):
+            let head = humanoid.node(for: .head)
+            firstPersonAnnotations = vrm1.firstPerson?.meshAnnotations.compactMap { annotation in
+                guard nodes.indices.contains(annotation.node),
+                      let node = nodes[annotation.node] else {
+                    return nil
+                }
+                let type = FirstPersonAnnotationType(vrm1Type: annotation.type)
+                return FirstPersonAnnotation(entity: node,
+                                             type: type,
+                                             hidesAutoInFirstPerson: type == .auto && node.isSameOrDescendant(of: head))
+            } ?? []
+        }
+        setFirstPersonRenderMode(.thirdPerson)
+    }
+
+    func setUpNodeConstraints(gltfNodes: [GLTF.Node], loader: VRMEntityLoader) throws {
+        guard case .v1 = vrm else {
+            nodeConstraints = []
+            return
+        }
+
+        var bindings: [NodeConstraintBinding] = []
+        for (targetIndex, gltfNode) in gltfNodes.enumerated() {
+            guard let constraint = gltfNode.extensions?.nodeConstraint?.constraint,
+                  let descriptor = VRMNodeConstraintDescriptor(constraint) else {
+                continue
+            }
+            let sourceIndex = descriptor.source
+            guard sourceIndex != targetIndex else {
+                throw VRMError._dataInconsistent("VRMC_node_constraint source must not be destination: \(targetIndex)")
+            }
+            guard gltfNodes.indices.contains(sourceIndex) else {
+                throw VRMError._dataInconsistent("VRMC_node_constraint source index is out of range: \(sourceIndex)")
+            }
+
+            let target = try loader.node(withNodeIndex: targetIndex)
+            let source = try loader.node(withNodeIndex: sourceIndex)
+            bindings.append(NodeConstraintBinding(targetIndex: targetIndex,
+                                                  sourceIndex: sourceIndex,
+                                                  descriptor: descriptor,
+                                                  target: target,
+                                                  source: source))
+        }
+        nodeConstraints = try NodeConstraintBinding.ordered(bindings)
     }
 
     func setUpSpringBones(loader: VRMEntityLoader) throws {
         var springBones: [VRMEntitySpringBone] = []
-        let secondaryAnimation = vrm.secondaryAnimation
-        for boneGroup in secondaryAnimation.boneGroups {
-            guard !boneGroup.bones.isEmpty else { continue }
-            let rootBones: [Entity] = try boneGroup.bones.compactMap { try loader.node(withNodeIndex: $0) }
-            let centerNode = try? loader.node(withNodeIndex: boneGroup.center)
-            let colliderGroups = try secondaryAnimation.colliderGroups.map {
+        switch vrm {
+        case .v0:
+            let secondaryAnimation = vrm.secondaryAnimation
+            let allColliderGroups = try secondaryAnimation.colliderGroups.map {
                 try VRMEntitySpringBoneColliderGroup(colliderGroup: $0, loader: loader)
             }
-            let springBone = VRMEntitySpringBone(center: centerNode,
-                                                     rootBones: rootBones,
-                                                     comment: boneGroup.comment,
-                                                     stiffnessForce: Float(boneGroup.stiffiness),
-                                                     gravityPower: Float(boneGroup.gravityPower),
-                                                     gravityDir: SIMD3<Float>(Float(boneGroup.gravityDir.x), Float(boneGroup.gravityDir.y), Float(boneGroup.gravityDir.z)),
-                                                     dragForce: Float(boneGroup.dragForce),
-                                                     hitRadius: Float(boneGroup.hitRadius),
+            for boneGroup in secondaryAnimation.boneGroups {
+                guard !boneGroup.bones.isEmpty else { continue }
+                let rootBones: [Entity] = try boneGroup.bones.compactMap { try loader.node(withNodeIndex: $0) }
+                let centerNode = try? loader.node(withNodeIndex: boneGroup.center)
+                let colliderGroups = boneGroup.colliderGroups.compactMap { index in
+                    allColliderGroups.indices.contains(index) ? allColliderGroups[index] : nil
+                }
+                let springBone = VRMEntitySpringBone(center: centerNode,
+                                                         rootBones: rootBones,
+                                                         comment: boneGroup.comment,
+                                                         stiffnessForce: Float(boneGroup.stiffiness),
+                                                         gravityPower: Float(boneGroup.gravityPower),
+                                                         gravityDir: SIMD3<Float>(Float(boneGroup.gravityDir.x), Float(boneGroup.gravityDir.y), Float(boneGroup.gravityDir.z)),
+                                                         dragForce: Float(boneGroup.dragForce),
+                                                         hitRadius: Float(boneGroup.hitRadius),
+                                                         colliderGroups: colliderGroups)
+                springBones.append(springBone)
+            }
+        case .v1(let vrm1):
+            guard let springBone = vrm1.springBone else { break }
+            for spring in springBone.springs ?? [] {
+                let jointEntities = try spring.joints.compactMap { try loader.node(withNodeIndex: $0.node) }
+                guard !jointEntities.isEmpty else { continue }
+                let centerEntity = try spring.center.map { try loader.node(withNodeIndex: $0) }
+                let colliderGroups = try spring.colliderGroups?.compactMap { groupIndex -> VRMEntitySpringBoneColliderGroup? in
+                    guard let groups = springBone.colliderGroups,
+                          groups.indices.contains(groupIndex) else {
+                        return nil
+                    }
+                    return try VRMEntitySpringBoneColliderGroup(colliderGroup: groups[groupIndex],
+                                                                springBone: springBone,
+                                                                loader: loader)
+                } ?? []
+                let settings = Dictionary(uniqueKeysWithValues: zip(jointEntities, spring.joints).map { entity, joint in
+                    (ObjectIdentifier(entity), VRMEntitySpringBone.JointSetting(joint: joint))
+                })
+                let springBone = VRMEntitySpringBone(center: centerEntity,
+                                                     rootBones: [jointEntities[0]],
+                                                     comment: spring.name,
+                                                     jointChain: jointEntities,
+                                                     jointSettings: settings,
                                                      colliderGroups: colliderGroups)
-            springBones.append(springBone)
+                springBones.append(springBone)
+            }
         }
         self.springBones = springBones
     }
@@ -95,7 +257,12 @@ public final class VRMEntity {
         initializeSkinPose(for: binding)
     }
 
+    func registerMaterialBinding(modelEntity: ModelEntity, materialIndex: Int) {
+        modelEntitiesByMaterialIndex[materialIndex, default: []].append(modelEntity)
+    }
+
     public func update(at time: TimeInterval) {
+        nodeConstraints.forEach { $0.apply() }
         updateSkinning()
         springBones.forEach { $0.update(deltaTime: time) }
     }
@@ -164,6 +331,10 @@ public final class VRMEntity {
     }
 
     public func setBlendShape(value: CGFloat, for key: BlendShapeKey) {
+        if case .v1 = vrm, let expressionKey = key.expressionKey {
+            setExpression(value: value, for: expressionKey)
+            return
+        }
         guard let clip = blendShapeClips[key] else { return }
         let normalized = max(0.0, min(1.0, clip.isBinary ? round(value) : value))
         for binding in clip.values {
@@ -186,9 +357,95 @@ public final class VRMEntity {
     }
 
     public func blendShape(for key: BlendShapeKey) -> CGFloat {
+        if case .v1 = vrm, let expressionKey = key.expressionKey {
+            return expression(for: expressionKey)
+        }
         guard let clip = blendShapeClips[key],
               let binding = clip.values.first else { return 0 }
         return CGFloat(readBlendShapeWeight(targetIndex: binding.index, on: binding.mesh))
+    }
+
+    public func setExpression(value: CGFloat, for key: ExpressionKey) {
+        guard let clip = expressionClip(for: key) else { return }
+        let normalized = max(0.0, min(1.0, clip.isBinary ? round(value) : value))
+        for binding in clip.values {
+            let weight = Float(binding.weight / 100.0) * Float(normalized)
+            applyBlendShapeWeight(weight, targetIndex: binding.index, on: binding.mesh)
+        }
+        for binding in materialColorClip(for: key) {
+            binding.apply(value: Float(normalized), on: self)
+        }
+        for binding in textureTransformClip(for: key) {
+            binding.apply(value: Float(normalized), on: self)
+        }
+    }
+
+    public func expression(for key: ExpressionKey) -> CGFloat {
+        guard let clip = expressionClip(for: key),
+              let binding = clip.values.first else { return 0 }
+        return CGFloat(readBlendShapeWeight(targetIndex: binding.index, on: binding.mesh))
+    }
+
+    public func setFirstPersonRenderMode(_ mode: FirstPersonRenderMode) {
+        for annotation in firstPersonAnnotations {
+            annotation.entity.isEnabled = !annotation.type.isHidden(in: mode,
+                                                                    hidesAutoInFirstPerson: annotation.hidesAutoInFirstPerson)
+        }
+    }
+
+    fileprivate func applyMaterialColor(_ color: SIMD4<Float>,
+                                        type: VRM1.Expressions.Expression.MaterialColorBind.MaterialColorType,
+                                        materialIndex: Int) {
+        guard let models = modelEntitiesByMaterialIndex[materialIndex] else { return }
+        let vrmColor = VRMColor(simd: color)
+        for modelEntity in models {
+            guard var component = modelEntity.components[ModelComponent.self] else { continue }
+            component.materials = component.materials.map { material in
+                material.settingColor(vrmColor, for: type)
+            }
+            modelEntity.components.set(component)
+        }
+    }
+
+    fileprivate func applyTextureTransform(scale: SIMD2<Float>,
+                                           offset: SIMD2<Float>,
+                                           materialIndex: Int) {
+        guard let models = modelEntitiesByMaterialIndex[materialIndex] else { return }
+        let transform = MaterialParameterTypes.TextureCoordinateTransform(offset: offset, scale: scale)
+        for modelEntity in models {
+            guard var component = modelEntity.components[ModelComponent.self] else { continue }
+            component.materials = component.materials.map { material in
+                material.settingTextureTransform(transform)
+            }
+            modelEntity.components.set(component)
+        }
+    }
+
+    private func expressionClip(for key: ExpressionKey) -> ExpressionClip? {
+        if let clip = expressionClips[key] { return clip }
+        if let legacyKey = key.legacyBlendShapeKey,
+           let expressionKey = legacyKey.expressionKey {
+            return expressionClips[expressionKey]
+        }
+        return nil
+    }
+
+    private func materialColorClip(for key: ExpressionKey) -> [MaterialColorBinding] {
+        if let clip = materialColorClips[key] { return clip }
+        if let legacyKey = key.legacyBlendShapeKey,
+           let expressionKey = legacyKey.expressionKey {
+            return materialColorClips[expressionKey] ?? []
+        }
+        return []
+    }
+
+    private func textureTransformClip(for key: ExpressionKey) -> [TextureTransformBinding] {
+        if let clip = textureTransformClips[key] { return clip }
+        if let legacyKey = key.legacyBlendShapeKey,
+           let expressionKey = legacyKey.expressionKey {
+            return textureTransformClips[expressionKey] ?? []
+        }
+        return []
     }
 
     private func modelEntities(in root: Entity) -> [ModelEntity] {
@@ -360,4 +617,209 @@ public final class VRMEntity {
         modelEntity.components.set(BlendShapeWeightsComponent(weightsMapping: mapping))
     }
 }
+
+@available(iOS 18.0, macOS 15.0, visionOS 2.0, *)
+private struct NodeConstraintBinding {
+    let targetIndex: Int
+    let sourceIndex: Int
+    let descriptor: VRMNodeConstraintDescriptor
+    let target: Entity
+    let source: Entity
+    let targetRestRotation: simd_quatf
+    let sourceRestRotation: simd_quatf
+
+    @MainActor
+    init(targetIndex: Int,
+         sourceIndex: Int,
+         descriptor: VRMNodeConstraintDescriptor,
+         target: Entity,
+         source: Entity) {
+        self.targetIndex = targetIndex
+        self.sourceIndex = sourceIndex
+        self.descriptor = descriptor
+        self.target = target
+        self.source = source
+        self.targetRestRotation = target.utx.localRotation
+        self.sourceRestRotation = source.utx.localRotation
+    }
+
+    @MainActor
+    func apply() {
+        target.utx.localRotation = VRMNodeConstraintRuntime.evaluate(
+            descriptor,
+            sourceRestRotation: sourceRestRotation,
+            sourceLocalRotation: source.utx.localRotation,
+            sourceWorldPosition: source.utx.position,
+            destinationRestRotation: targetRestRotation,
+            destinationParentWorldRotation: target.parent?.utx.rotation ?? quat_identity_float,
+            destinationWorldPosition: target.utx.position
+        )
+    }
+
+    static func ordered(_ bindings: [NodeConstraintBinding]) throws -> [NodeConstraintBinding] {
+        var byTargetIndex: [Int: NodeConstraintBinding] = [:]
+        for binding in bindings {
+            if byTargetIndex[binding.targetIndex] != nil {
+                throw VRMError._dataInconsistent("Multiple constraints targeting the same node \(binding.targetIndex)")
+            }
+            byTargetIndex[binding.targetIndex] = binding
+        }
+        var states: [Int: VisitState] = [:]
+        var result: [NodeConstraintBinding] = []
+
+        func visit(_ binding: NodeConstraintBinding) throws {
+            switch states[binding.targetIndex] {
+            case .done:
+                return
+            case .visiting:
+                throw VRMError._dataInconsistent("VRMC_node_constraint circular dependency detected at node \(binding.targetIndex)")
+            case .none:
+                break
+            }
+
+            states[binding.targetIndex] = .visiting
+            if let dependency = byTargetIndex[binding.sourceIndex] {
+                try visit(dependency)
+            }
+            states[binding.targetIndex] = .done
+            result.append(binding)
+        }
+
+        for binding in bindings {
+            try visit(binding)
+        }
+        return result
+    }
+
+    private enum VisitState {
+        case visiting
+        case done
+    }
+}
+
+@available(iOS 18.0, macOS 15.0, visionOS 2.0, *)
+private struct MaterialColorBinding {
+    let materialIndex: Int
+    let type: VRM1.Expressions.Expression.MaterialColorBind.MaterialColorType
+    let targetValue: SIMD4<Float>
+    let baseValue: SIMD4<Float>
+
+    @MainActor
+    func apply(value: Float, on entity: VRMEntity) {
+        entity.applyMaterialColor(baseValue + (targetValue - baseValue) * value,
+                                  type: type,
+                                  materialIndex: materialIndex)
+    }
+}
+
+@available(iOS 18.0, macOS 15.0, visionOS 2.0, *)
+private struct TextureTransformBinding {
+    let materialIndex: Int
+    let baseScale: SIMD2<Float>
+    let baseOffset: SIMD2<Float>
+    let targetScale: SIMD2<Float>
+    let targetOffset: SIMD2<Float>
+
+    @MainActor
+    func apply(value: Float, on entity: VRMEntity) {
+        let scale = baseScale + (targetScale - baseScale) * value
+        let offset = baseOffset + (targetOffset - baseOffset) * value
+        entity.applyTextureTransform(scale: scale,
+                                     offset: offset,
+                                     materialIndex: materialIndex)
+    }
+}
+
+@available(iOS 18.0, macOS 15.0, visionOS 2.0, *)
+private struct FirstPersonAnnotation {
+    let entity: Entity
+    let type: FirstPersonAnnotationType
+    let hidesAutoInFirstPerson: Bool
+}
+
+@available(iOS 18.0, macOS 15.0, visionOS 2.0, *)
+private extension Entity {
+    func isSameOrDescendant(of ancestor: Entity?) -> Bool {
+        guard let ancestor else { return false }
+        var entity: Entity? = self
+        while let current = entity {
+            if current === ancestor {
+                return true
+            }
+            entity = current.parent
+        }
+        return false
+    }
+}
+
+@available(iOS 18.0, macOS 15.0, visionOS 2.0, *)
+private extension Material {
+    var currentTextureTransform: MaterialParameterTypes.TextureCoordinateTransform {
+        switch self {
+        case let material as UnlitMaterial:
+            return material.textureCoordinateTransform
+        case let material as PhysicallyBasedMaterial:
+            return material.textureCoordinateTransform
+        default:
+            return MaterialParameterTypes.TextureCoordinateTransform()
+        }
+    }
+
+    func currentColor(for type: VRM1.Expressions.Expression.MaterialColorBind.MaterialColorType) -> SIMD4<Float> {
+        switch self {
+        case let material as UnlitMaterial:
+            return material.color.tint.simd
+        case let material as PhysicallyBasedMaterial:
+            switch type {
+            case .color:
+                return material.baseColor.tint.simd
+            case .emissionColor:
+                return material.emissiveColor.color.simd
+            case .shadeColor:
+                return material.baseColor.tint.simd
+            case .matcapColor, .rimColor:
+                return material.emissiveColor.color.simd
+            case .outlineColor:
+                return material.baseColor.tint.simd
+            }
+        default:
+            return SIMD4<Float>(1, 1, 1, 1)
+        }
+    }
+
+    func settingColor(_ color: VRMColor,
+                      for type: VRM1.Expressions.Expression.MaterialColorBind.MaterialColorType) -> Material {
+        switch self {
+        case var material as UnlitMaterial:
+            material.color.tint = color
+            return material
+        case var material as PhysicallyBasedMaterial:
+            switch type {
+            case .color, .shadeColor, .outlineColor:
+                material.baseColor.tint = color
+            case .emissionColor:
+                material.emissiveColor.color = color
+            case .matcapColor, .rimColor:
+                material.emissiveColor.color = color
+            }
+            return material
+        default:
+            return self
+        }
+    }
+
+    func settingTextureTransform(_ transform: MaterialParameterTypes.TextureCoordinateTransform) -> Material {
+        switch self {
+        case var material as UnlitMaterial:
+            material.textureCoordinateTransform = transform
+            return material
+        case var material as PhysicallyBasedMaterial:
+            material.textureCoordinateTransform = transform
+            return material
+        default:
+            return self
+        }
+    }
+}
+
 #endif

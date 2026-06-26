@@ -23,28 +23,28 @@ open class VRMLoader {
     }
 
     open func loadThumbnail(from vrm: VRM) throws -> VRMImage {
-        guard let textureIndex = vrm.meta.texture, textureIndex >= 0 else {
-            throw VRMError.thumbnailNotFound
+        switch vrm {
+        case .v0(let vrm0):
+            return try loadThumbnail(from: vrm0)
+        case .v1(let vrm1):
+            return try loadThumbnail(from: vrm1)
         }
-        return try loadImage(from: vrm.gltf, at: textureIndex)
     }
 
     open func loadThumbnail(from vrm0: VRM0) throws -> VRMImage {
-        guard let textureIndex = vrm0.meta.texture, textureIndex >= 0 else {
-            throw VRMError.thumbnailNotFound
-        }
-        return try loadImage(from: vrm0.gltf, at: textureIndex)
+        try loadImage(from: vrm0.gltf, at: vrm0.thumbnailImageIndex)
     }
 
     open func loadThumbnail(from vrm1: VRM1) throws -> VRMImage {
-        guard let imageIndex = vrm1.meta.thumbnailImage, imageIndex >= 0 else {
-            throw VRMError.thumbnailNotFound
-        }
-        return try loadImage(from: vrm1.gltf, at: imageIndex)
+        try loadImage(from: vrm1.gltf, at: vrm1.thumbnailImageIndex)
     }
 
     private func loadImage(from gltf: BinaryGLTF, at index: Int, relativeTo rootDirectory: URL? = nil) throws -> VRMImage {
-        let gltfImage = try gltf.jsonData.load(\.images)[index]
+        let images = try gltf.jsonData.load(\.images)
+        guard images.indices.contains(index) else {
+            throw VRMError.thumbnailNotFound
+        }
+        let gltfImage = images[index]
         let imageData: Data
         if let uri = gltfImage.uri {
             imageData = try Data(gltfUrlString: uri, relativeTo: rootDirectory)

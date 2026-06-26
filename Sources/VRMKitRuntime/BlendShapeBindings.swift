@@ -1,5 +1,6 @@
 import simd
 
+/// Morph target binding shared by VRM 0.x BlendShape and VRM 1.0 Expression runtime clips.
 package struct BlendShapeBinding<Mesh> {
     package let mesh: Mesh
     package let index: Int
@@ -12,6 +13,7 @@ package struct BlendShapeBinding<Mesh> {
     }
 }
 
+/// Runtime clip for VRM 0.x BlendShape groups.
 package struct BlendShapeClip<Mesh> {
     package let name: String
     package let preset: BlendShapePreset
@@ -33,6 +35,29 @@ package struct BlendShapeClip<Mesh> {
     }
 }
 
+/// Runtime clip for VRM 1.0 Expressions.
+package struct ExpressionClip<Mesh> {
+    package let name: String
+    package let preset: ExpressionPreset?
+    package let values: [BlendShapeBinding<Mesh>]
+    package let isBinary: Bool
+
+    package var key: ExpressionKey {
+        return preset.map(ExpressionKey.preset) ?? .custom(name)
+    }
+
+    package init(name: String,
+                 preset: ExpressionPreset?,
+                 values: [BlendShapeBinding<Mesh>],
+                 isBinary: Bool) {
+        self.name = name
+        self.preset = preset
+        self.values = values
+        self.isBinary = isBinary
+    }
+}
+
+/// Material value binding used by VRM 0.x BlendShape material values.
 package struct MaterialValueBinding {
     package let materialName: String
     package let valueName: String
