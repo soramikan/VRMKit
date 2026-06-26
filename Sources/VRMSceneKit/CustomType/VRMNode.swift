@@ -246,7 +246,7 @@ open class VRMNode: SCNNode {
 
     public func setExpression(value: CGFloat, for key: ExpressionKey) {
         guard let clip = expressionClip(for: key) else { return }
-        let value: CGFloat = clip.isBinary ? round(value) : value
+        let value = max(0.0, min(1.0, clip.isBinary ? round(value) : value))
         for binding in clip.values {
             let weight = CGFloat(binding.weight / 100.0)
             for morpher in binding.mesh.allMorphers {
@@ -432,49 +432,6 @@ private struct FirstPersonAnnotation {
     let node: SCNNode
     let type: FirstPersonAnnotationType
     let hidesAutoInFirstPerson: Bool
-}
-
-private enum FirstPersonAnnotationType {
-    case auto
-    case both
-    case thirdPersonOnly
-    case firstPersonOnly
-
-    init(vrm1Type: VRM1.FirstPerson.FirstPersonType) {
-        switch vrm1Type {
-        case .auto: self = .auto
-        case .both: self = .both
-        case .thirdPersonOnly: self = .thirdPersonOnly
-        case .firstPersonOnly: self = .firstPersonOnly
-        }
-    }
-
-    init?(vrm0Flag: String) {
-        switch vrm0Flag.lowercased() {
-        case "auto":
-            self = .auto
-        case "both":
-            self = .both
-        case "thirdpersononly":
-            self = .thirdPersonOnly
-        case "firstpersononly":
-            self = .firstPersonOnly
-        default:
-            return nil
-        }
-    }
-
-    func isHidden(in mode: FirstPersonRenderMode, hidesAutoInFirstPerson: Bool) -> Bool {
-        switch (self, mode) {
-        case (.auto, .firstPerson):
-            return hidesAutoInFirstPerson
-        case (.firstPersonOnly, .thirdPerson),
-             (.thirdPersonOnly, .firstPerson):
-            return true
-        default:
-            return false
-        }
-    }
 }
 
 private extension SCNNode {

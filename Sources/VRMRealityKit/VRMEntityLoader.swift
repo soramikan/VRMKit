@@ -445,10 +445,6 @@ open class VRMEntityLoader {
                 return .white
             }
             let factor = pbr.baseColorFactor
-            let hasExplicitFactor = !(factor.r == 0 && factor.g == 0 && factor.b == 0 && factor.a == 0)
-            if !hasExplicitFactor {
-                return .white
-            }
             return VRMColor(red: CGFloat(factor.r),
                            green: CGFloat(factor.g),
                            blue: CGFloat(factor.b),

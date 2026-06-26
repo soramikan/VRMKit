@@ -122,7 +122,11 @@ open class VRMSceneLoader {
 
     func material(withMaterialIndex index: Int) throws -> SCNMaterial {
         if let cache = try sceneData.load(\.materials, index: index) { return cache }
-        let gltfMaterial = try gltf.load(\.materials)[index]
+        let materials = try gltf.load(\.materials)
+        guard materials.indices.contains(index) else {
+            throw VRMError._dataInconsistent("Material index \(index) out of bounds")
+        }
+        let gltfMaterial = materials[index]
         let material = try SCNMaterial(material: gltfMaterial, loader: self)
         sceneData.materials[index] = material
         return material

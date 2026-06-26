@@ -195,30 +195,30 @@ public extension VRM1 {
     }
     
     struct Expressions: Codable {
-        public let preset: Preset
+        public let preset: Preset?
         public let custom: CodableAny?
         public let extensions: CodableAny?
         public let extras: CodableAny?
 
         public struct Preset: Codable {
-            public let happy: Expression
-            public let angry: Expression
-            public let sad: Expression
-            public let relaxed: Expression
-            public let surprised: Expression
-            public let aa: Expression
-            public let ih: Expression
-            public let ou: Expression
-            public let ee: Expression
-            public let oh: Expression
-            public let blink: Expression
-            public let blinkLeft: Expression
-            public let blinkRight: Expression
-            public let lookUp: Expression
-            public let lookDown: Expression
-            public let lookLeft: Expression
-            public let lookRight: Expression
-            public let neutral: Expression
+            public let happy: Expression?
+            public let angry: Expression?
+            public let sad: Expression?
+            public let relaxed: Expression?
+            public let surprised: Expression?
+            public let aa: Expression?
+            public let ih: Expression?
+            public let ou: Expression?
+            public let ee: Expression?
+            public let oh: Expression?
+            public let blink: Expression?
+            public let blinkLeft: Expression?
+            public let blinkRight: Expression?
+            public let lookUp: Expression?
+            public let lookDown: Expression?
+            public let lookLeft: Expression?
+            public let lookRight: Expression?
+            public let neutral: Expression?
         }
 
         public struct Expression: Codable {
