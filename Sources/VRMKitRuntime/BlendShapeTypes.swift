@@ -36,44 +36,7 @@ public enum BlendShapePreset: String {
     case blinkR = "blink_r"
 
     public init(name: String) {
-        switch name.replacingOccurrences(of: "_", with: "").lowercased() {
-        case "neutral":
-            self = .neutral
-        case "a":
-            self = .a
-        case "i":
-            self = .i
-        case "u":
-            self = .u
-        case "e":
-            self = .e
-        case "o":
-            self = .o
-        case "blink":
-            self = .blink
-        case "joy":
-            self = .joy
-        case "angry":
-            self = .angry
-        case "sorrow":
-            self = .sorrow
-        case "fun":
-            self = .fun
-        case "lookup":
-            self = .lookUp
-        case "lookdown":
-            self = .lookDown
-        case "lookleft":
-            self = .lookLeft
-        case "lookright":
-            self = .lookRight
-        case "blinkl":
-            self = .blinkL
-        case "blinkr":
-            self = .blinkR
-        default:
-            self = .unknown
-        }
+        self = BlendShapePreset(rawValue: name.lowercased()) ?? .unknown
     }
 }
 
@@ -99,27 +62,7 @@ public enum ExpressionPreset: String {
     case lookRight
 
     public init?(name: String) {
-        switch name.replacingOccurrences(of: "_", with: "").lowercased() {
-        case "neutral": self = .neutral
-        case "happy": self = .happy
-        case "angry": self = .angry
-        case "sad": self = .sad
-        case "relaxed": self = .relaxed
-        case "surprised": self = .surprised
-        case "aa": self = .aa
-        case "ih": self = .ih
-        case "ou": self = .ou
-        case "ee": self = .ee
-        case "oh": self = .oh
-        case "blink": self = .blink
-        case "blinkleft": self = .blinkLeft
-        case "blinkright": self = .blinkRight
-        case "lookup": self = .lookUp
-        case "lookdown": self = .lookDown
-        case "lookleft": self = .lookLeft
-        case "lookright": self = .lookRight
-        default: return nil
-        }
+        self.init(rawValue: name)
     }
 }
 
