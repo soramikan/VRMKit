@@ -46,20 +46,44 @@ open class VRMEntityLoader {
             vrmEntity.entity.addChild(try self.node(withNodeIndex: node))
         }
         vrmEntity.setUpHumanoid(nodes: entityData.nodes)
-        vrmEntity.setUpBlendShapes(meshes: entityData.meshes)
+        try vrmEntity.setUpBlendShapes(nodes: entityData.nodes, meshes: entityData.meshes, loader: self)
+        vrmEntity.setUpFirstPerson(nodes: entityData.nodes, meshes: entityData.meshes)
+        try vrmEntity.setUpNodeConstraints(gltfNodes: try gltf.load(\.nodes), loader: self)
         try vrmEntity.setUpSpringBones(loader: self)
-        // TODO: Constraints, animations.
+        // TODO: animations.
 
         entityData.entities[index] = vrmEntity
         return vrmEntity
     }
 
     public func loadThumbnail() throws -> VRMImage {
-        guard let textureIndex = vrm.meta.texture, textureIndex >= 0 else {
-            throw VRMError.thumbnailNotFound
+        switch vrm {
+        case .v0(let vrm0):
+            guard let textureIndex = vrm0.meta.texture, textureIndex >= 0 else {
+                throw VRMError.thumbnailNotFound
+            }
+            let textures = try gltf.load(\.textures)
+            guard textures.indices.contains(textureIndex) else {
+                throw VRMError.thumbnailNotFound
+            }
+            let texture = textures[textureIndex]
+            let images = try gltf.load(\.images)
+            guard images.indices.contains(texture.source) else {
+                throw VRMError.thumbnailNotFound
+            }
+            if let cache = try entityData.load(\.images, index: texture.source) { return cache }
+            return try image(withImageIndex: texture.source)
+        case .v1(let vrm1):
+            guard let imageIndex = vrm1.meta.thumbnailImage, imageIndex >= 0 else {
+                throw VRMError.thumbnailNotFound
+            }
+            let images = try gltf.load(\.images)
+            guard images.indices.contains(imageIndex) else {
+                throw VRMError.thumbnailNotFound
+            }
+            if let cache = try entityData.load(\.images, index: imageIndex) { return cache }
+            return try image(withImageIndex: imageIndex)
         }
-        if let cache = try entityData.load(\.images, index: textureIndex) { return cache }
-        return try image(withImageIndex: textureIndex)
     }
 
     func node(withNodeIndex index: Int) throws -> Entity {
@@ -128,7 +152,9 @@ open class VRMEntityLoader {
 
     func mesh(withMeshIndex index: Int, skinIndex: Int?) throws -> Entity {
         if skinIndex == nil, let cache = try entityData.load(\.meshes, index: index) {
-            return cache.clone(recursive: true)
+            let clone = cache.clone(recursive: true)
+            registerMaterialBindings(in: clone)
+            return clone
         }
 
         let gltfMesh = try gltf.load(\.meshes)[index]
@@ -163,11 +189,14 @@ open class VRMEntityLoader {
 
         if skinIndex == nil {
             entityData.meshes[index] = meshEntity
-            return meshEntity.clone(recursive: true)
+            let clone = meshEntity.clone(recursive: true)
+            registerMaterialBindings(in: clone)
+            return clone
         }
         if entityData.meshes.indices.contains(index), entityData.meshes[index] == nil {
             entityData.meshes[index] = meshEntity
         }
+        registerMaterialBindings(in: meshEntity)
         return meshEntity
     }
 
@@ -329,6 +358,9 @@ open class VRMEntityLoader {
         }
 
         let modelEntity = ModelEntity(mesh: mesh, materials: [material])
+        if let materialIndex = primitive.material {
+            modelEntity.components.set(VRMMaterialIndexComponent(materialIndex: materialIndex))
+        }
         if hasBlendShapes {
             let mapping = BlendShapeWeightsMapping(meshResource: mesh)
             modelEntity.components.set(BlendShapeWeightsComponent(weightsMapping: mapping))
@@ -393,11 +425,16 @@ open class VRMEntityLoader {
 
     func material(withMaterialIndex index: Int) throws -> Material {
         if let cache = try entityData.load(\.materials, index: index) { return cache }
-        let gltfMaterial = try gltf.load(\.materials)[index]
+        let materials = try gltf.load(\.materials)
+        guard materials.indices.contains(index) else {
+            throw VRMError._dataInconsistent("Material index \(index) out of bounds")
+        }
+        let gltfMaterial = materials[index]
 
         let materialProperty: VRM0.MaterialProperty? = {
-            guard let name = gltfMaterial.name else { return nil }
-            return vrm.materialPropertyNameMap[name]
+            guard case .v0(let vrm0) = vrm,
+                  let name = gltfMaterial.name else { return nil }
+            return vrm0.materialPropertyNameMap[name]
         }()
         let shaderName = materialProperty?.shader.lowercased()
         // MToon / Unlit variants are not PBR, so use UnlitMaterial for consistent rendering
@@ -1344,6 +1381,18 @@ open class VRMEntityLoader {
         vrmEntity.registerSkinBinding(modelEntity: modelEntity,
                                       skeleton: skeleton,
                                       jointEntities: jointEntities)
+    }
+
+    private func registerMaterialBindings(in root: Entity) {
+        guard let vrmEntity = currentEntity else { return }
+        var stack: [Entity] = [root]
+        while let entity = stack.popLast() {
+            if let modelEntity = entity as? ModelEntity,
+               let materialIndex = modelEntity.components[VRMMaterialIndexComponent.self]?.materialIndex {
+                vrmEntity.registerMaterialBinding(modelEntity: modelEntity, materialIndex: materialIndex)
+            }
+            stack.append(contentsOf: entity.children)
+        }
     }
 
     private func transform(from node: GLTF.Node) -> Transform {
