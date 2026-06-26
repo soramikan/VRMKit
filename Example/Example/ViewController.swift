@@ -1,46 +1,6 @@
 import UIKit
 import SceneKit
-internal import VRMKit
 internal import VRMSceneKit
-
-enum VRMExampleModel: String, CaseIterable, Identifiable {
-    case alicia = "AliciaSolid.vrm"
-    case vrm1 = "VRM1_Constraint_Twist_Sample.vrm"
-
-    var id: String { rawValue }
-
-    var displayName: String {
-        switch self {
-        case .alicia: return "Alicia"
-        case .vrm1: return "VRM 1.0"
-        }
-    }
-
-    var initialRotation: Float {
-        switch self {
-        case .alicia: return 0
-        case .vrm1: return .pi
-        }
-    }
-}
-
-enum Expression: String, CaseIterable {
-    case neutral, joy, angry, sorrow, fun
-    
-    var preset: BlendShapePreset {
-        switch self {
-        case .neutral: return .neutral
-        case .joy: return .joy
-        case .angry: return .angry
-        case .sorrow: return .sorrow
-        case .fun: return .fun
-        }
-    }
-    
-    var displayName: String {
-        return rawValue.capitalized
-    }
-}
 
 class ViewController: UIViewController {
 
@@ -54,7 +14,9 @@ class ViewController: UIViewController {
     }
     
     private var vrmNode: VRMNode?
-    private var currentExpression: Expression = .neutral
+    private var expressionSegmentedControl: UISegmentedControl?
+    private var currentModel: VRMExampleModel = .alicia
+    private var currentExpression: ExampleExpression = .neutral
     
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -70,12 +32,13 @@ class ViewController: UIViewController {
         segmentedControl.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(segmentedControl)
         
-        let expressionItems = Expression.allCases.map { $0.displayName }
+        let expressionItems = ExampleExpression.allCases.map { $0.displayName(for: currentModel) }
         let expressionSegmentedControl = UISegmentedControl(items: expressionItems)
         expressionSegmentedControl.selectedSegmentIndex = 0
         expressionSegmentedControl.addTarget(self, action: #selector(expressionSegmentChanged(_:)), for: .valueChanged)
         expressionSegmentedControl.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(expressionSegmentedControl)
+        self.expressionSegmentedControl = expressionSegmentedControl
         
         NSLayoutConstraint.activate([
             segmentedControl.centerXAnchor.constraint(equalTo: view.centerXAnchor),
@@ -92,14 +55,16 @@ class ViewController: UIViewController {
     }
     
     @objc private func expressionSegmentChanged(_ sender: UISegmentedControl) {
-        let expression = Expression.allCases[sender.selectedSegmentIndex]
-        vrmNode?.setBlendShape(value: 0.0, for: .preset(currentExpression.preset))
+        let expression = ExampleExpression.allCases[sender.selectedSegmentIndex]
+        vrmNode?.setExampleExpression(currentExpression, value: 0.0)
         currentExpression = expression
-        vrmNode?.setBlendShape(value: 1.0, for: .preset(currentExpression.preset))
+        vrmNode?.setExampleExpression(currentExpression, value: 1.0)
     }
 
     private func loadVRM(model: VRMExampleModel) {
         do {
+            currentModel = model
+            updateExpressionLabels()
             let loader = try VRMSceneLoader(named: model.rawValue)
             let scene = try loader.loadScene()
             setupScene(scene)
@@ -111,7 +76,7 @@ class ViewController: UIViewController {
             let rotationOffset = CGFloat(model.initialRotation)
             node.eulerAngles = SCNVector3(0, rotationOffset, 0)
             
-            node.setBlendShape(value: 1.0, for: .preset(currentExpression.preset))
+            node.setExampleExpression(currentExpression, value: 1.0)
             
             node.humanoid.node(for: .neck)?.eulerAngles = SCNVector3(0, 0, 20 * CGFloat.pi / 180)
             let leftArm: SCNNode?
@@ -134,6 +99,18 @@ class ViewController: UIViewController {
         } catch {
             print(error)
         }
+    }
+
+    private func updateExpressionLabels() {
+        guard let expressionSegmentedControl else { return }
+        let selectedIndex = expressionSegmentedControl.selectedSegmentIndex
+        expressionSegmentedControl.removeAllSegments()
+        for (index, expression) in ExampleExpression.allCases.enumerated() {
+            expressionSegmentedControl.insertSegment(withTitle: expression.displayName(for: currentModel),
+                                                     at: index,
+                                                     animated: false)
+        }
+        expressionSegmentedControl.selectedSegmentIndex = selectedIndex >= 0 ? selectedIndex : 0
     }
 
     private func setupScene(_ scene: SCNScene) {

@@ -11,8 +11,9 @@ open class VRMNode: SCNNode {
     private var springBones: [VRMSpringBone] = []
 
     var blendShapeClips: [BlendShapeKey: BlendShapeClip] = [:]
-    private var materialColorClips: [BlendShapeKey: [MaterialColorBinding]] = [:]
-    private var textureTransformClips: [BlendShapeKey: [TextureTransformBinding]] = [:]
+    var expressionClips: [ExpressionKey: ExpressionClip] = [:]
+    private var materialColorClips: [ExpressionKey: [MaterialColorBinding]] = [:]
+    private var textureTransformClips: [ExpressionKey: [TextureTransformBinding]] = [:]
     private var firstPersonAnnotations: [FirstPersonAnnotation] = []
     private var nodeConstraints: [NodeConstraintBinding] = []
 
@@ -36,6 +37,7 @@ open class VRMNode: SCNNode {
 
     func setUpBlendShapes(nodes: [SCNNode?], meshes: [SCNNode?], loader: VRMSceneLoader) throws {
         blendShapeClips = [:]
+        expressionClips = [:]
         materialColorClips = [:]
         textureTransformClips = [:]
 
@@ -70,11 +72,11 @@ open class VRMNode: SCNNode {
                         }
                         return BlendShapeBinding(mesh: node, index: bind.index, weight: bind.weight * 100.0)
                     } ?? []
-                let clip = BlendShapeClip(name: expressionClip.name,
-                                          preset: expressionClip.preset,
-                                          values: morphBindings,
-                                          isBinary: expressionClip.expression.isBinary ?? false)
-                blendShapeClips[clip.key] = clip
+                let runtimeClip = ExpressionClip(name: expressionClip.name,
+                                                 preset: expressionClip.preset,
+                                                 values: morphBindings,
+                                                 isBinary: expressionClip.expression.isBinary ?? false)
+                expressionClips[runtimeClip.key] = runtimeClip
 
                 let colorBindings: [MaterialColorBinding] = try expressionClip.expression.materialColorBinds?
                     .compactMap { bind in
@@ -86,7 +88,7 @@ open class VRMNode: SCNNode {
                                                     baseValue: material.currentColor(for: bind.type))
                     } ?? []
                 if !colorBindings.isEmpty {
-                    materialColorClips[clip.key] = colorBindings
+                    materialColorClips[runtimeClip.key] = colorBindings
                 }
 
                 let transformBindings: [TextureTransformBinding] = try expressionClip.expression.textureTransformBinds?
@@ -100,7 +102,7 @@ open class VRMNode: SCNNode {
                                                        targetOffset: SIMD2<Float>(bind.offset, defaultValue: 0.0))
                     } ?? []
                 if !transformBindings.isEmpty {
-                    textureTransformClips[clip.key] = transformBindings
+                    textureTransformClips[runtimeClip.key] = transformBindings
                 }
             }
         }
@@ -228,7 +230,22 @@ open class VRMNode: SCNNode {
     ///   - value: a weight of the blend shape (0.0 <= value <= 1.0)
     ///   - key: a key of the blend shape
     public func setBlendShape(value: CGFloat, for key: BlendShapeKey) {
-        guard let clip = blendShapeClip(for: key) else { return }
+        if case .v1 = vrm, let expressionKey = key.expressionKey {
+            setExpression(value: value, for: expressionKey)
+            return
+        }
+        guard let clip = blendShapeClips[key] else { return }
+        let value: CGFloat = clip.isBinary ? round(value) : value
+        for binding in clip.values {
+            let weight = CGFloat(binding.weight / 100.0)
+            for morpher in binding.mesh.allMorphers {
+                morpher.setWeight(weight * value, forTargetAt: binding.index)
+            }
+        }
+    }
+
+    public func setExpression(value: CGFloat, for key: ExpressionKey) {
+        guard let clip = expressionClip(for: key) else { return }
         let value: CGFloat = clip.isBinary ? round(value) : value
         for binding in clip.values {
             let weight = CGFloat(binding.weight / 100.0)
@@ -249,7 +266,17 @@ open class VRMNode: SCNNode {
     /// - Parameter key: a key of the blend shape
     /// - Returns: a weight of the blend shape
     public func blendShape(for key: BlendShapeKey) -> CGFloat {
-        guard let clip = blendShapeClip(for: key),
+        if case .v1 = vrm, let expressionKey = key.expressionKey {
+            return expression(for: expressionKey)
+        }
+        guard let clip = blendShapeClips[key],
+            let binding = clip.values.first,
+            let morpher = binding.mesh.allMorphers.first else { return 0 }
+        return morpher.weight(forTargetAt: binding.index)
+    }
+
+    public func expression(for key: ExpressionKey) -> CGFloat {
+        guard let clip = expressionClip(for: key),
             let binding = clip.values.first,
             let morpher = binding.mesh.allMorphers.first else { return 0 }
         return morpher.weight(forTargetAt: binding.index)
@@ -262,19 +289,31 @@ open class VRMNode: SCNNode {
         }
     }
 
-    private func blendShapeClip(for key: BlendShapeKey) -> BlendShapeClip? {
-        if let clip = blendShapeClips[key] { return clip }
-        return key.aliases.lazy.compactMap { self.blendShapeClips[$0] }.first
+    private func expressionClip(for key: ExpressionKey) -> ExpressionClip? {
+        if let clip = expressionClips[key] { return clip }
+        if let legacyKey = key.legacyBlendShapeKey,
+           let expressionKey = legacyKey.expressionKey {
+            return expressionClips[expressionKey]
+        }
+        return nil
     }
 
-    private func materialColorClip(for key: BlendShapeKey) -> [MaterialColorBinding] {
+    private func materialColorClip(for key: ExpressionKey) -> [MaterialColorBinding] {
         if let clip = materialColorClips[key] { return clip }
-        return key.aliases.lazy.compactMap { self.materialColorClips[$0] }.first ?? []
+        if let legacyKey = key.legacyBlendShapeKey,
+           let expressionKey = legacyKey.expressionKey {
+            return materialColorClips[expressionKey] ?? []
+        }
+        return []
     }
 
-    private func textureTransformClip(for key: BlendShapeKey) -> [TextureTransformBinding] {
+    private func textureTransformClip(for key: ExpressionKey) -> [TextureTransformBinding] {
         if let clip = textureTransformClips[key] { return clip }
-        return key.aliases.lazy.compactMap { self.textureTransformClips[$0] }.first ?? []
+        if let legacyKey = key.legacyBlendShapeKey,
+           let expressionKey = legacyKey.expressionKey {
+            return textureTransformClips[expressionKey] ?? []
+        }
+        return []
     }
 }
 

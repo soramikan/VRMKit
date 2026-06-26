@@ -1,8 +1,8 @@
 import VRMKit
 
 package extension VRM1.Expressions {
-    var runtimeClips: [(name: String, preset: BlendShapePreset, expression: VRM1.Expressions.Expression)] {
-        var clips: [(String, BlendShapePreset, VRM1.Expressions.Expression)] = [
+    var runtimeClips: [(name: String, preset: ExpressionPreset?, expression: VRM1.Expressions.Expression)] {
+        var clips: [(String, ExpressionPreset?, VRM1.Expressions.Expression)] = [
             ("Happy", .happy, preset.happy),
             ("Angry", .angry, preset.angry),
             ("Sad", .sad, preset.sad),
@@ -33,7 +33,7 @@ package extension VRM1.Expressions {
                   let expression = try? decoder.decode(VRM1.Expressions.Expression.self, from: raw) else {
                 continue
             }
-            clips.append((name, .unknown, expression))
+            clips.append((name, nil, expression))
         }
         return clips
     }

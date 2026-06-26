@@ -122,7 +122,9 @@ sceneView.scene = scene
 
 </details>
 
-### Blend shapes
+### Blend shapes / expressions
+
+VRM 0.x uses blend shapes:
 
 <img src="https://github.com/tattn/VRMKit/raw/main/.github/alicia_joy.png" width="100px" alt="joy" />
 
@@ -142,12 +144,26 @@ vrmEntity.setBlendShape(value: 1.0, for: .preset(.angry))
 vrmEntity.setBlendShape(value: 1.0, for: .custom("><"))
 ```
 
+VRM 1.0 uses expressions:
+
+```swift
+vrmEntity.setExpression(value: 1.0, for: .preset(.happy))
+vrmEntity.setExpression(value: 1.0, for: .preset(.aa))
+vrmEntity.setExpression(value: 1.0, for: .custom("customExpressionName"))
+```
+
 ### Bone animation
 
 <img src="https://github.com/tattn/VRMKit/raw/main/.github/alicia_humanoid.png" width="200px" alt="Humanoid" />
 
 ```swift
-vrmEntity.setBlendShape(value: 1.0, for: .preset(.fun))
+switch vrmEntity.vrm {
+case .v0:
+    vrmEntity.setBlendShape(value: 1.0, for: .preset(.fun))
+case .v1:
+    vrmEntity.setExpression(value: 1.0, for: .preset(.relaxed))
+}
+
 let neckRotation = simd_quatf(angle: 20 * .pi / 180, axis: SIMD3<Float>(0, 0, 1))
 let armRotation = simd_quatf(angle: 40 * .pi / 180, axis: SIMD3<Float>(0, 0, 1))
 let (leftArm, rightArm): (Entity?, Entity?)

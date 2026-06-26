@@ -50,13 +50,13 @@ struct VRM1SceneLoaderTests {
         let scene = try vrmLoader.loadScene()
         let vrmNode = scene.vrmNode
 
-        #expect(vrmNode.blendShapeClips.count == 18)
-        let happyBinding = try #require(vrmNode.blendShapeClips[.preset(.happy)]?.values.first)
+        #expect(vrmNode.expressionClips.count == 18)
+        let happyBinding = try #require(vrmNode.expressionClips[.preset(.happy)]?.values.first)
         #expect(happyBinding.mesh === (try vrmLoader.node(withNodeIndex: 2)))
-        #expect(vrmNode.blendShapeClips[.preset(.aa)]?.values.first?.index == 25)
+        #expect(vrmNode.expressionClips[.preset(.aa)]?.values.first?.index == 25)
 
-        vrmNode.setBlendShape(value: 0.42, for: .preset(.aa))
-        #expect(abs(vrmNode.blendShape(for: .preset(.aa)) - 0.42) < 0.001)
+        vrmNode.setExpression(value: 0.42, for: .preset(.aa))
+        #expect(abs(vrmNode.expression(for: .preset(.aa)) - 0.42) < 0.001)
         #expect(abs(vrmNode.blendShape(for: .preset(.a)) - 0.42) < 0.001)
     }
 

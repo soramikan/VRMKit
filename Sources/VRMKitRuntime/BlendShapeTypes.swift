@@ -1,3 +1,7 @@
+/// VRM 0.x BlendShape key.
+///
+/// VRM 1.0 expressions should use `ExpressionKey`; this type is kept for
+/// VRM 0.x models and source compatibility with the older public API.
 public enum BlendShapeKey: Hashable {
     case preset(BlendShapePreset)
     case custom(String)
@@ -10,7 +14,7 @@ public enum BlendShapeKey: Hashable {
     }
 }
 
-/// VRM expression preset.
+/// VRM 0.x Blend Shape Preset.
 public enum BlendShapePreset: String {
     case unknown
     case neutral
@@ -30,17 +34,6 @@ public enum BlendShapePreset: String {
     case lookRight = "lookright"
     case blinkL = "blink_l"
     case blinkR = "blink_r"
-    case happy
-    case sad
-    case relaxed
-    case surprised
-    case aa
-    case ih
-    case ou
-    case ee
-    case oh
-    case blinkLeft
-    case blinkRight
 
     public init(name: String) {
         switch name.replacingOccurrences(of: "_", with: "").lowercased() {
@@ -78,69 +71,149 @@ public enum BlendShapePreset: String {
             self = .blinkL
         case "blinkr":
             self = .blinkR
-        case "happy":
-            self = .happy
-        case "sad":
-            self = .sad
-        case "relaxed":
-            self = .relaxed
-        case "surprised":
-            self = .surprised
-        case "aa":
-            self = .aa
-        case "ih":
-            self = .ih
-        case "ou":
-            self = .ou
-        case "ee":
-            self = .ee
-        case "oh":
-            self = .oh
-        case "blinkleft":
-            self = .blinkLeft
-        case "blinkright":
-            self = .blinkRight
         default:
             self = .unknown
         }
     }
 }
 
-package extension BlendShapePreset {
-    var aliases: [BlendShapePreset] {
+/// VRM 1.0 Expression Preset.
+public enum ExpressionPreset: String {
+    case neutral
+    case happy
+    case angry
+    case sad
+    case relaxed
+    case surprised
+    case aa
+    case ih
+    case ou
+    case ee
+    case oh
+    case blink
+    case blinkLeft
+    case blinkRight
+    case lookUp
+    case lookDown
+    case lookLeft
+    case lookRight
+
+    public init?(name: String) {
+        switch name.replacingOccurrences(of: "_", with: "").lowercased() {
+        case "neutral": self = .neutral
+        case "happy": self = .happy
+        case "angry": self = .angry
+        case "sad": self = .sad
+        case "relaxed": self = .relaxed
+        case "surprised": self = .surprised
+        case "aa": self = .aa
+        case "ih": self = .ih
+        case "ou": self = .ou
+        case "ee": self = .ee
+        case "oh": self = .oh
+        case "blink": self = .blink
+        case "blinkleft": self = .blinkLeft
+        case "blinkright": self = .blinkRight
+        case "lookup": self = .lookUp
+        case "lookdown": self = .lookDown
+        case "lookleft": self = .lookLeft
+        case "lookright": self = .lookRight
+        default: return nil
+        }
+    }
+}
+
+/// VRM 1.0 Expression key.
+///
+/// Use this with `setExpression(value:for:)` / `expression(for:)` when working
+/// with native VRM 1.0 expression presets or custom expressions.
+public enum ExpressionKey: Hashable {
+    case preset(ExpressionPreset)
+    case custom(String)
+
+    public var isPreset: Bool {
         switch self {
-        case .joy: return [.happy]
-        case .happy: return [.joy]
-        case .sorrow: return [.sad]
-        case .sad: return [.sorrow]
-        case .fun: return [.relaxed]
-        case .relaxed: return [.fun]
-        case .a: return [.aa]
-        case .aa: return [.a]
-        case .i: return [.ih]
-        case .ih: return [.i]
-        case .u: return [.ou]
-        case .ou: return [.u]
-        case .e: return [.ee]
-        case .ee: return [.e]
-        case .o: return [.oh]
-        case .oh: return [.o]
-        case .blinkL: return [.blinkLeft]
-        case .blinkLeft: return [.blinkL]
-        case .blinkR: return [.blinkRight]
-        case .blinkRight: return [.blinkR]
-        default: return []
+        case .preset: return true
+        case .custom: return false
+        }
+    }
+}
+
+package extension BlendShapePreset {
+    /// Compatibility bridge from VRM 0.x blend shape presets to VRM 1.0 expressions.
+    var expressionPreset: ExpressionPreset? {
+        switch self {
+        case .neutral: return .neutral
+        case .a: return .aa
+        case .i: return .ih
+        case .u: return .ou
+        case .e: return .ee
+        case .o: return .oh
+        case .blink: return .blink
+        case .joy: return .happy
+        case .angry: return .angry
+        case .sorrow: return .sad
+        case .fun: return .relaxed
+        case .lookUp: return .lookUp
+        case .lookDown: return .lookDown
+        case .lookLeft: return .lookLeft
+        case .lookRight: return .lookRight
+        case .blinkL: return .blinkLeft
+        case .blinkR: return .blinkRight
+        case .unknown: return nil
         }
     }
 }
 
 package extension BlendShapeKey {
-    var aliases: [BlendShapeKey] {
+    /// Compatibility bridge for older `setBlendShape` calls on VRM 1.0 models.
+    var expressionKey: ExpressionKey? {
         switch self {
         case .preset(let preset):
-            return preset.aliases.map(BlendShapeKey.preset)
-        case .custom:
-            return []
+            return preset.expressionPreset.map(ExpressionKey.preset)
+        case .custom(let name):
+            if let preset = ExpressionPreset(name: name) {
+                return .preset(preset)
+            }
+            return .custom(name)
+        }
+    }
+}
+
+package extension ExpressionPreset {
+    /// Compatibility bridge from VRM 1.0 expression presets to legacy VRM 0.x names.
+    var legacyBlendShapePreset: BlendShapePreset? {
+        switch self {
+        case .neutral: return .neutral
+        case .aa: return .a
+        case .ih: return .i
+        case .ou: return .u
+        case .ee: return .e
+        case .oh: return .o
+        case .blink: return .blink
+        case .happy: return .joy
+        case .angry: return .angry
+        case .sad: return .sorrow
+        case .relaxed: return .fun
+        case .lookUp: return .lookUp
+        case .lookDown: return .lookDown
+        case .lookLeft: return .lookLeft
+        case .lookRight: return .lookRight
+        case .blinkLeft: return .blinkL
+        case .blinkRight: return .blinkR
+        case .surprised: return nil
+        }
+    }
+}
+
+package extension ExpressionKey {
+    /// Compatibility bridge for code paths that still expose VRM 0.x blend shape keys.
+    var legacyBlendShapeKey: BlendShapeKey? {
+        switch self {
+        case .preset(let preset):
+            return preset.legacyBlendShapePreset.map(BlendShapeKey.preset)
+        case .custom(let name):
+            return .custom(name)
         }
     }
 }

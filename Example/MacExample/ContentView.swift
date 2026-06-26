@@ -40,7 +40,7 @@ struct ContentView: View {
 
                 Picker("Expression", selection: $selectedExpression) {
                     ForEach(MacExampleExpression.allCases) { expression in
-                        Text(expression.displayName).tag(expression)
+                        Text(expression.displayName(for: selectedModel)).tag(expression)
                     }
                 }
                 .pickerStyle(.segmented)
@@ -176,7 +176,7 @@ final class RealityKitContentViewModel {
             if let rightArm {
                 rightArm.transform.rotation = rightArm.transform.rotation * armRotation
             }
-            vrmEntity.setBlendShape(value: 1.0, for: .preset(expression.preset))
+            vrmEntity.setExampleExpression(expression, value: 1.0)
             
             self.vrmEntity = vrmEntity
             self.currentModel = model
@@ -190,9 +190,9 @@ final class RealityKitContentViewModel {
 
     func setExpression(_ expression: MacExampleExpression) {
         guard expression != currentExpression else { return }
-        vrmEntity?.setBlendShape(value: 0.0, for: .preset(currentExpression.preset))
+        vrmEntity?.setExampleExpression(currentExpression, value: 0.0)
         currentExpression = expression
-        vrmEntity?.setBlendShape(value: 1.0, for: .preset(expression.preset))
+        vrmEntity?.setExampleExpression(expression, value: 1.0)
     }
     
     func update() {
@@ -265,7 +265,7 @@ final class SceneKitContentViewModel {
             let node = scene.vrmNode
             node.eulerAngles = SCNVector3(0, CGFloat(model.sceneKitInitialRotation), 0)
             applyPose(to: node)
-            node.setBlendShape(value: 1.0, for: .preset(expression.preset))
+            node.setExampleExpression(expression, value: 1.0)
 
             self.scene = scene
             self.vrmNode = node
@@ -280,9 +280,9 @@ final class SceneKitContentViewModel {
 
     func setExpression(_ expression: MacExampleExpression) {
         guard expression != currentExpression else { return }
-        vrmNode?.setBlendShape(value: 0.0, for: .preset(currentExpression.preset))
+        vrmNode?.setExampleExpression(currentExpression, value: 0.0)
         currentExpression = expression
-        vrmNode?.setBlendShape(value: 1.0, for: .preset(expression.preset))
+        vrmNode?.setExampleExpression(expression, value: 1.0)
     }
 
     func update() {
@@ -334,67 +334,6 @@ final class SceneKitContentViewModel {
     }
 }
 
-enum MacExampleRenderer: String, CaseIterable, Identifiable {
-    case sceneKit
-    case realityKit
-
-    var id: String { rawValue }
-
-    var displayName: String {
-        switch self {
-        case .sceneKit: return "SceneKit"
-        case .realityKit: return "RealityKit"
-        }
-    }
-}
-
-enum MacExampleExpression: String, CaseIterable, Identifiable {
-    case neutral, joy, angry, sorrow, fun
-
-    var id: String { rawValue }
-
-    var preset: BlendShapePreset {
-        switch self {
-        case .neutral: return .neutral
-        case .joy: return .joy
-        case .angry: return .angry
-        case .sorrow: return .sorrow
-        case .fun: return .fun
-        }
-    }
-
-    var displayName: String {
-        rawValue.capitalized
-    }
-}
-
-enum MacExampleModel: String, CaseIterable, Identifiable {
-    case alicia = "AliciaSolid.vrm"
-    case vrm1 = "VRM1_Constraint_Twist_Sample.vrm"
-
-    var id: String { rawValue }
-
-    var displayName: String {
-        switch self {
-        case .alicia: return "Alicia"
-        case .vrm1: return "VRM 1.0"
-        }
-    }
-
-    var initialRotation: Float {
-        switch self {
-        case .alicia: return .pi
-        case .vrm1: return 0
-        }
-    }
-
-    var sceneKitInitialRotation: Float {
-        switch self {
-        case .alicia: return 0
-        case .vrm1: return .pi
-        }
-    }
-}
 
 #Preview {
     ContentView()
