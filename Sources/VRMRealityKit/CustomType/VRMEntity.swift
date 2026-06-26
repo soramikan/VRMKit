@@ -30,6 +30,7 @@ public final class VRMEntity {
 
     var blendShapeClips: [BlendShapeKey: BlendShapeClip] = [:]
     private var materialColorClips: [BlendShapeKey: [MaterialColorBinding]] = [:]
+    private var textureTransformClips: [BlendShapeKey: [TextureTransformBinding]] = [:]
     private var firstPersonAnnotations: [FirstPersonAnnotation] = []
     private var skinBindings: [SkinBinding] = []
     private var modelEntitiesByMaterialIndex: [Int: [ModelEntity]] = [:]
@@ -59,6 +60,7 @@ public final class VRMEntity {
     func setUpBlendShapes(nodes: [Entity?], meshes: [Entity?], loader: VRMEntityLoader) throws {
         blendShapeClips = [:]
         materialColorClips = [:]
+        textureTransformClips = [:]
 
         switch vrm {
         case .v0:
@@ -108,6 +110,20 @@ public final class VRMEntity {
                     } ?? []
                 if !colorBindings.isEmpty {
                     materialColorClips[clip.key] = colorBindings
+                }
+
+                let transformBindings: [TextureTransformBinding] = try expressionClip.expression.textureTransformBinds?
+                    .compactMap { bind in
+                        let material = try loader.material(withMaterialIndex: bind.material)
+                        let base = material.currentTextureTransform
+                        return TextureTransformBinding(materialIndex: bind.material,
+                                                       baseScale: base.scale,
+                                                       baseOffset: base.offset,
+                                                       targetScale: SIMD2<Float>(bind.scale, defaultValue: 1.0),
+                                                       targetOffset: SIMD2<Float>(bind.offset, defaultValue: 0.0))
+                    } ?? []
+                if !transformBindings.isEmpty {
+                    textureTransformClips[clip.key] = transformBindings
                 }
             }
         }
@@ -322,6 +338,9 @@ public final class VRMEntity {
         for binding in materialColorClip(for: key) {
             binding.apply(value: Float(normalized), on: self)
         }
+        for binding in textureTransformClip(for: key) {
+            binding.apply(value: Float(normalized), on: self)
+        }
         if enableNormalTangentBlendShape {
             var meshesToUpdate: [Entity] = []
             var seenMeshes = Set<ObjectIdentifier>()
@@ -364,6 +383,20 @@ public final class VRMEntity {
         }
     }
 
+    fileprivate func applyTextureTransform(scale: SIMD2<Float>,
+                                           offset: SIMD2<Float>,
+                                           materialIndex: Int) {
+        guard let models = modelEntitiesByMaterialIndex[materialIndex] else { return }
+        let transform = MaterialParameterTypes.TextureCoordinateTransform(offset: offset, scale: scale)
+        for modelEntity in models {
+            guard var component = modelEntity.components[ModelComponent.self] else { continue }
+            component.materials = component.materials.map { material in
+                material.settingTextureTransform(transform)
+            }
+            modelEntity.components.set(component)
+        }
+    }
+
     private func blendShapeClip(for key: BlendShapeKey) -> BlendShapeClip? {
         if let clip = blendShapeClips[key] { return clip }
         return key.aliases.lazy.compactMap { self.blendShapeClips[$0] }.first
@@ -372,6 +405,11 @@ public final class VRMEntity {
     private func materialColorClip(for key: BlendShapeKey) -> [MaterialColorBinding] {
         if let clip = materialColorClips[key] { return clip }
         return key.aliases.lazy.compactMap { self.materialColorClips[$0] }.first ?? []
+    }
+
+    private func textureTransformClip(for key: BlendShapeKey) -> [TextureTransformBinding] {
+        if let clip = textureTransformClips[key] { return clip }
+        return key.aliases.lazy.compactMap { self.textureTransformClips[$0] }.first ?? []
     }
 
     private func modelEntities(in root: Entity) -> [ModelEntity] {
@@ -639,6 +677,24 @@ private struct MaterialColorBinding {
 }
 
 @available(iOS 18.0, macOS 15.0, visionOS 2.0, *)
+private struct TextureTransformBinding {
+    let materialIndex: Int
+    let baseScale: SIMD2<Float>
+    let baseOffset: SIMD2<Float>
+    let targetScale: SIMD2<Float>
+    let targetOffset: SIMD2<Float>
+
+    @MainActor
+    func apply(value: Float, on entity: VRMEntity) {
+        let scale = baseScale + (targetScale - baseScale) * value
+        let offset = baseOffset + (targetOffset - baseOffset) * value
+        entity.applyTextureTransform(scale: scale,
+                                     offset: offset,
+                                     materialIndex: materialIndex)
+    }
+}
+
+@available(iOS 18.0, macOS 15.0, visionOS 2.0, *)
 private struct FirstPersonAnnotation {
     let entity: Entity
     let type: FirstPersonAnnotationType
@@ -703,7 +759,19 @@ private extension Entity {
     }
 }
 
+@available(iOS 18.0, macOS 15.0, visionOS 2.0, *)
 private extension Material {
+    var currentTextureTransform: MaterialParameterTypes.TextureCoordinateTransform {
+        switch self {
+        case let material as UnlitMaterial:
+            return material.textureCoordinateTransform
+        case let material as PhysicallyBasedMaterial:
+            return material.textureCoordinateTransform
+        default:
+            return MaterialParameterTypes.TextureCoordinateTransform()
+        }
+    }
+
     func currentColor(for type: VRM1.Expressions.Expression.MaterialColorBind.MaterialColorType) -> SIMD4<Float> {
         switch self {
         case let material as UnlitMaterial:
@@ -746,6 +814,19 @@ private extension Material {
             return self
         }
     }
+
+    func settingTextureTransform(_ transform: MaterialParameterTypes.TextureCoordinateTransform) -> Material {
+        switch self {
+        case var material as UnlitMaterial:
+            material.textureCoordinateTransform = transform
+            return material
+        case var material as PhysicallyBasedMaterial:
+            material.textureCoordinateTransform = transform
+            return material
+        default:
+            return self
+        }
+    }
 }
 
 private extension VRMColor {
@@ -780,6 +861,13 @@ private extension SIMD4 where Scalar == Float {
                   Float(values[safe: 1] ?? 0),
                   Float(values[safe: 2] ?? 0),
                   Float(values[safe: 3] ?? Double(defaultAlpha)))
+    }
+}
+
+private extension SIMD2 where Scalar == Float {
+    init(_ values: [Double]?, defaultValue: Float) {
+        self.init(Float(values?[safe: 0] ?? Double(defaultValue)),
+                  Float(values?[safe: 1] ?? Double(defaultValue)))
     }
 }
 #endif
