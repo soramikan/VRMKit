@@ -1,0 +1,130 @@
+#if canImport(RealityKit)
+import Foundation
+import Metal
+import RealityKit
+import simd
+import VRMKit
+import VRMKitRuntime
+
+@available(iOS 18.0, macOS 15.0, visionOS 2.0, *)
+struct MToonMaterialParametersComponent: Component {
+    var parameters: MToonMaterialParameters
+}
+
+@available(iOS 18.0, macOS 15.0, visionOS 2.0, *)
+struct MToonMaterialParameters {
+    static let defaultLightDirection = simd_normalize(SIMD3<Float>(0.35, 0.55, 0.75))
+
+    var baseColor: SIMD4<Float>
+    var shadeColor: SIMD4<Float>
+    var rimColor: SIMD4<Float>
+    var matcapColor: SIMD4<Float>
+    var outlineColor: SIMD4<Float>
+    var shadeParams: SIMD4<Float>
+    var rimParams: SIMD4<Float>
+    var outlineParams: SIMD4<Float>
+    var uvAnimation: SIMD4<Float>
+    var featureFlags: SIMD4<Float>
+    var extraFlags: SIMD4<Float>
+    var lightDirection: SIMD3<Float> = MToonMaterialParameters.defaultLightDirection
+    var elapsedTime: Float = 0
+
+    init(_ mtoon: MToonMaterialDescriptor) {
+        baseColor = mtoon.baseColorFactor
+        shadeColor = mtoon.shadeColorFactor
+        rimColor = mtoon.parametricRimColorFactor
+        matcapColor = SIMD4<Float>(mtoon.matcapFactor.x, mtoon.matcapFactor.y, mtoon.matcapFactor.z, 1)
+        outlineColor = mtoon.outlineColorFactor
+        shadeParams = SIMD4<Float>(mtoon.shadingShiftFactor,
+                                   mtoon.shadingToonyFactor,
+                                   mtoon.giEqualizationFactor,
+                                   mtoon.alphaCutoff)
+        rimParams = SIMD4<Float>(mtoon.parametricRimFresnelPowerFactor,
+                                 mtoon.parametricRimLiftFactor,
+                                 mtoon.rimLightingMixFactor,
+                                 mtoon.outlineLightingMixFactor)
+        outlineParams = SIMD4<Float>(mtoon.outlineWidthFactor,
+                                     mtoon.outlineWidthMode.rawValue,
+                                     mtoon.outlineLightingMixFactor,
+                                     mtoon.hasOutline ? 1 : 0)
+        uvAnimation = SIMD4<Float>(mtoon.uvAnimationScrollXSpeedFactor,
+                                   mtoon.uvAnimationScrollYSpeedFactor,
+                                   mtoon.uvAnimationRotationSpeedFactor,
+                                   mtoon.shadingShiftTextureScale)
+        featureFlags = SIMD4<Float>(mtoon.matcapTexture == nil ? 0 : 1,
+                                    mtoon.rimMultiplyTexture == nil ? 0 : 1,
+                                    mtoon.shadingShiftTexture == nil ? 0 : 1,
+                                    mtoon.uvAnimationMaskTexture == nil ? 0 : 1)
+        extraFlags = SIMD4<Float>(mtoon.normalTexture == nil ? 0 : 1,
+                                  mtoon.shadeMultiplyTexture == nil ? 0 : 1,
+                                  0,
+                                  0)
+    }
+
+    var customValue: SIMD4<Float> {
+        SIMD4<Float>(lightDirection.x, lightDirection.y, lightDirection.z, elapsedTime)
+    }
+
+    mutating func setColor(_ color: SIMD4<Float>,
+                           for type: VRM1.Expressions.Expression.MaterialColorBind.MaterialColorType) -> Bool {
+        switch type {
+        case .color:
+            baseColor = color
+        case .shadeColor:
+            shadeColor = color
+        case .matcapColor:
+            matcapColor = color
+        case .rimColor:
+            rimColor = color
+        case .outlineColor:
+            outlineColor = color
+        case .emissionColor:
+            return false
+        }
+        return true
+    }
+
+    func color(for type: VRM1.Expressions.Expression.MaterialColorBind.MaterialColorType) -> SIMD4<Float>? {
+        switch type {
+        case .color:
+            return baseColor
+        case .shadeColor:
+            return shadeColor
+        case .matcapColor:
+            return matcapColor
+        case .rimColor:
+            return rimColor
+        case .outlineColor:
+            return outlineColor
+        case .emissionColor:
+            return nil
+        }
+    }
+
+    @MainActor
+    func textureResource() throws -> TextureResource {
+        let rows = [
+            baseColor,
+            shadeColor,
+            rimColor,
+            matcapColor,
+            outlineColor,
+            shadeParams,
+            rimParams,
+            outlineParams,
+            uvAnimation,
+            featureFlags,
+            extraFlags
+        ]
+        let data = rows.withUnsafeBufferPointer { Data(buffer: $0) }
+        let mip = TextureResource.Contents.MipmapLevel.mip(
+            data: data,
+            bytesPerRow: MemoryLayout<SIMD4<Float>>.stride * rows.count
+        )
+        return try TextureResource(dimensions: .dimensions(width: rows.count, height: 1),
+                                   format: .raw(pixelFormat: .rgba32Float),
+                                   contents: .init(mipmapLevels: [mip]))
+    }
+}
+
+#endif

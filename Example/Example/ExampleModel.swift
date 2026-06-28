@@ -20,10 +20,18 @@ enum VRMExampleModel: String, CaseIterable, Identifiable {
         }
     }
 
-    var initialRotation: Float {
+    var sceneKitInitialRotation: Float {
         switch self {
         case .alicia: return 0
         case .vrm1: return .pi
+        }
+    }
+
+    // Keep RealityKit orientation offsets separate from SceneKit; renderer coordinate conventions differ.
+    var realityKitInitialRotation: Float {
+        switch self {
+        case .alicia: return .pi
+        case .vrm1: return 0
         }
     }
 }

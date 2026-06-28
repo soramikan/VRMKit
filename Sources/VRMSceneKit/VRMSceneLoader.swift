@@ -11,6 +11,7 @@ open class VRMSceneLoader {
     private let sceneData: SceneData
 
     private var rootDirectory: URL? = nil
+    private var outlineMaterialsByMaterialIndex: [Int: [SCNMaterial]] = [:]
 
     public init(vrm: VRM, rootDirectory: URL? = nil) {
         self.vrm = vrm
@@ -130,6 +131,14 @@ open class VRMSceneLoader {
         let material = try SCNMaterial(material: gltfMaterial, loader: self)
         sceneData.materials[index] = material
         return material
+    }
+
+    func materials(withMaterialIndex index: Int) throws -> [SCNMaterial] {
+        [try material(withMaterialIndex: index)] + (outlineMaterialsByMaterialIndex[index] ?? [])
+    }
+
+    func registerMToonOutlineMaterial(_ material: SCNMaterial, materialIndex: Int) {
+        outlineMaterialsByMaterialIndex[materialIndex, default: []].append(material)
     }
 
     func vrm0MaterialProperty(named name: String) -> VRM0.MaterialProperty? {

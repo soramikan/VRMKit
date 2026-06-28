@@ -44,6 +44,19 @@ extension SCNMaterialProperty {
         mappingChannel = textureInfo.texCoord ?? 0
     }
 
+    func setMToonTexture(_ textureInfo: MToonMaterialDescriptor.Texture, loader: VRMSceneLoader) throws {
+        let texture = try loader.texture(withTextureIndex: textureInfo.index)
+        contents = texture.contents
+        magnificationFilter = texture.magnificationFilter
+        minificationFilter = texture.minificationFilter
+        mipFilter = texture.mipFilter
+        wrapS = texture.wrapS
+        wrapT = texture.wrapT
+        intensity = texture.intensity
+
+        mappingChannel = textureInfo.texCoord
+    }
+
     private func filterMode(of filter: GLTF.Sampler.MagFilter) -> SCNFilterMode {
         switch filter {
         case .NEAREST: return .nearest

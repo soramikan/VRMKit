@@ -21,7 +21,8 @@ let package = Package(
         ),
         .target(
             name: "VRMRealityKit",
-            dependencies: ["VRMKit", "VRMKitRuntime"]
+            dependencies: ["VRMKit", "VRMKitRuntime"],
+            resources: [.copy("Shaders")]
         ),
 
         .testTarget(
@@ -32,6 +33,15 @@ let package = Package(
         .testTarget(
             name: "VRMSceneKitTests",
             dependencies: ["VRMSceneKit"],
+            resources: [
+                .copy("../VRMKitTests/Assets/AliciaSolid.vrm"),
+                .copy("../VRMKitTests/Assets/Seed-san.vrm"),
+                .copy("../VRMKitTests/Assets/VRM1_Constraint_Twist_Sample.vrm")
+            ]
+        ),
+        .testTarget(
+            name: "VRMRealityKitTests",
+            dependencies: ["VRMRealityKit"],
             resources: [.copy("../VRMKitTests/Assets/AliciaSolid.vrm"), .copy("../VRMKitTests/Assets/Seed-san.vrm")]
         ),
     ]

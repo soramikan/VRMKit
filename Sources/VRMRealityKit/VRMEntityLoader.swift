@@ -1,7 +1,9 @@
 #if canImport(RealityKit)
 import CoreGraphics
+import Foundation
 import RealityKit
 import Metal
+import OSLog
 import VRMKit
 import VRMKitRuntime
 
@@ -15,9 +17,20 @@ open class VRMEntityLoader {
     private var rootDirectory: URL? = nil
     private let entityName: String?
     private weak var currentEntity: VRMEntity?
+    private static let logger = Logger(subsystem: "dev.tattn.VRMKit", category: "MToon")
+    // VRMEntityLoader is @MainActor-isolated, so these mutable shader caches are only touched on the main actor.
+    private static let mtoonShaderDevice = MTLCreateSystemDefaultDevice()
+    private static let mtoonShaderSource = loadMToonShaderSource()
+    private static var mtoonLibraryCache: [MToonSamplerVariant: MTLLibrary] = [:]
+    private static var mtoonDefaultLibraryCache: MTLLibrary?
     private var textureCacheBySemantic: [TextureResource.Semantic: [Int: TextureResource]] = [:]
     private var metallicRoughnessCache: [Int: (metal: TextureResource, rough: TextureResource)] = [:]
     private var samplerCache: [Int: MaterialParameters.Texture.Sampler] = [:]
+    private var defaultSamplerCache: MaterialParameters.Texture.Sampler?
+    private var whiteTextureCache: TextureResource?
+    private var neutralNormalTextureCache: TextureResource?
+    private var mtoonParameterCache: [Int: MToonMaterialParameters] = [:]
+    private var mtoonOutlineMaterialCache: [Int: Material] = [:]
     private var enableNormalTangentBlendShape = false // NOTE: Setting this to true currently has no effect
 
     public init(vrm: VRM, rootDirectory: URL? = nil) {
@@ -158,8 +171,8 @@ open class VRMEntityLoader {
                let sharedTargets = targetsByPositionAccessor[positionAccessor] {
                 resolvedPrimitive.targets = sharedTargets
             }
-            if let modelEntity = try modelEntity(withPrimitive: resolvedPrimitive, skinIndex: skinIndex) {
-                meshEntity.addChild(modelEntity)
+            if let primitiveEntity = try modelEntity(withPrimitive: resolvedPrimitive, skinIndex: skinIndex) {
+                meshEntity.addChild(primitiveEntity)
             }
         }
 
@@ -176,7 +189,7 @@ open class VRMEntityLoader {
         return meshEntity
     }
 
-    private func modelEntity(withPrimitive primitive: GLTF.Mesh.Primitive, skinIndex: Int?) throws -> ModelEntity? {
+    private func modelEntity(withPrimitive primitive: GLTF.Mesh.Primitive, skinIndex: Int?) throws -> Entity? {
         guard supportsTriangles(primitive.mode) else { return nil }
 
         let attributes = primitive.attributes.rawValue
@@ -336,6 +349,9 @@ open class VRMEntityLoader {
         let modelEntity = ModelEntity(mesh: mesh, materials: [material])
         if let materialIndex = primitive.material {
             modelEntity.components.set(VRMMaterialIndexComponent(materialIndex: materialIndex))
+            if let parameters = try mtoonParameters(withMaterialIndex: materialIndex) {
+                modelEntity.components.set(MToonMaterialParametersComponent(parameters: parameters))
+            }
         }
         if hasBlendShapes {
             let mapping = BlendShapeWeightsMapping(meshResource: mesh)
@@ -351,6 +367,35 @@ open class VRMEntityLoader {
         }
         if let skinIndex, let boundSkeleton {
             try registerSkinBinding(modelEntity: modelEntity, skinIndex: skinIndex, skeleton: boundSkeleton)
+        }
+        if let materialIndex = primitive.material,
+           let outlineMaterial = try mtoonOutlineMaterial(withMaterialIndex: materialIndex) {
+            let outlineEntity = ModelEntity(mesh: mesh, materials: [outlineMaterial])
+            outlineEntity.name = "\(modelEntity.name)_outline"
+            outlineEntity.components.set(VRMMaterialIndexComponent(materialIndex: materialIndex))
+            if let parameters = try mtoonParameters(withMaterialIndex: materialIndex) {
+                outlineEntity.components.set(MToonMaterialParametersComponent(parameters: parameters))
+            }
+            if hasBlendShapes {
+                let mapping = BlendShapeWeightsMapping(meshResource: mesh)
+                outlineEntity.components.set(BlendShapeWeightsComponent(weightsMapping: mapping))
+            }
+            if enableNormalTangentBlendShape,
+               !finalNormalOffsets.isEmpty || !finalTangentOffsets.isEmpty {
+                let component = BlendShapeNormalTangentComponent(baseNormals: finalNormals,
+                                                                 baseTangents: finalTangents,
+                                                                 normalOffsets: finalNormalOffsets,
+                                                                 tangentOffsets: finalTangentOffsets)
+                outlineEntity.components.set(component)
+            }
+            if let skinIndex, let boundSkeleton {
+                try registerSkinBinding(modelEntity: outlineEntity, skinIndex: skinIndex, skeleton: boundSkeleton)
+            }
+            let container = Entity()
+            container.name = "\(modelEntity.name)_container"
+            container.addChild(outlineEntity)
+            container.addChild(modelEntity)
+            return container
         }
         return modelEntity
     }
@@ -413,9 +458,10 @@ open class VRMEntityLoader {
             return vrm0.materialPropertyNameMap[name]
         }()
         let shaderName = materialProperty?.shader.lowercased()
+        let mtoon = MToonMaterialDescriptor(material: gltfMaterial, materialProperty: materialProperty)
         // MToon / Unlit variants are not PBR, so use UnlitMaterial for consistent rendering
         // This matches SceneKit's behavior which uses lightingModel = .constant
-        let isMToon = shaderName?.contains("mtoon") == true || gltfMaterial.extensions?.materialsMToon != nil
+        let isMToon = mtoon != nil || shaderName?.contains("mtoon") == true || gltfMaterial.extensions?.materialsMToon != nil
         let isUnlit = shaderName?.contains("unlit") == true || gltfMaterial.extensions?.materialsUnlit != nil
         let useUnlit = isMToon || isUnlit
         let hasAlphaPremultiply = materialProperty?.keywordMap["_ALPHAPREMULTIPLY_ON"] == true
@@ -450,6 +496,12 @@ open class VRMEntityLoader {
                            blue: CGFloat(factor.b),
                            alpha: CGFloat(factor.a))
         }()
+
+        if let mtoon, let library = try mtoonShaderLibrary(for: mtoon) {
+            let material = try customMToonMaterial(mtoon, library: library)
+            entityData.materials[index] = material
+            return material
+        }
 
         if useUnlit {
             var material = UnlitMaterial()
@@ -522,6 +574,318 @@ open class VRMEntityLoader {
         return material
     }
 
+    private func customMToonMaterial(_ mtoon: MToonMaterialDescriptor,
+                                     library: MTLLibrary) throws -> Material {
+        let surface = CustomMaterial.SurfaceShader(named: "mtoonSurface", in: library)
+        let geometry = CustomMaterial.GeometryModifier(named: "mtoonGeometry", in: library)
+        var material = try CustomMaterial(surfaceShader: surface,
+                                          geometryModifier: geometry,
+                                          lightingModel: .unlit)
+        if let baseTexture = mtoon.baseColorTexture {
+            let textureParam = try customTexture(withTextureIndex: baseTexture.index, semantic: .color)
+            material.baseColor = .init(tint: .white, texture: textureParam)
+        } else {
+            material.baseColor = .init(tint: .white, texture: try whiteCustomTexture())
+        }
+
+        if let shadeTexture = mtoon.shadeMultiplyTexture {
+            material.roughness.texture = try customTexture(withTextureIndex: shadeTexture.index, semantic: .color)
+        } else if let baseTexture = mtoon.baseColorTexture {
+            material.roughness.texture = try customTexture(withTextureIndex: baseTexture.index, semantic: .color)
+        } else {
+            material.roughness.texture = try whiteCustomTexture()
+        }
+        if let shadingShiftTexture = mtoon.shadingShiftTexture {
+            material.specular.texture = try customTexture(withTextureIndex: shadingShiftTexture.index, semantic: .color)
+        } else {
+            material.specular.texture = try whiteCustomTexture()
+        }
+        if let matcapTexture = mtoon.matcapTexture {
+            material.metallic.texture = try customTexture(withTextureIndex: matcapTexture.index, semantic: .color)
+        } else {
+            material.metallic.texture = try whiteCustomTexture()
+        }
+
+        if let normalTexture = mtoon.normalTexture {
+            material.normal.texture = try customTexture(withTextureIndex: normalTexture.index, semantic: .normal)
+        } else {
+            material.normal.texture = try neutralNormalCustomTexture()
+        }
+
+        if let rimTexture = mtoon.rimMultiplyTexture {
+            let textureParam = try customTexture(withTextureIndex: rimTexture.index, semantic: .color)
+            material.emissiveColor = .init(color: .white, texture: textureParam)
+        } else {
+            material.emissiveColor = .init(color: .white, texture: try whiteCustomTexture())
+        }
+        if let outlineWidthTexture = mtoon.outlineWidthMultiplyTexture {
+            material.clearcoat.texture = try customTexture(withTextureIndex: outlineWidthTexture.index, semantic: .color)
+        } else {
+            material.clearcoat.texture = try whiteCustomTexture()
+        }
+        if let uvMaskTexture = mtoon.uvAnimationMaskTexture {
+            material.ambientOcclusion.texture = try customTexture(withTextureIndex: uvMaskTexture.index, semantic: .color)
+        } else {
+            material.ambientOcclusion.texture = try whiteCustomTexture()
+        }
+
+        applyAlphaMode(mtoon.alphaMode, alphaCutoff: mtoon.alphaCutoff, to: &material)
+        material.faceCulling = .none
+
+        let parameters = MToonMaterialParameters(mtoon)
+        material.custom.value = parameters.customValue
+        material.custom.texture = CustomMaterial.Texture(try parameters.textureResource())
+        return material
+    }
+
+    private func customMToonOutlineMaterial(_ mtoon: MToonMaterialDescriptor,
+                                            library: MTLLibrary) throws -> Material {
+        let surface = CustomMaterial.SurfaceShader(named: "mtoonOutlineSurface", in: library)
+        let geometry = CustomMaterial.GeometryModifier(named: "mtoonOutlineGeometry", in: library)
+        var material = try CustomMaterial(surfaceShader: surface,
+                                          geometryModifier: geometry,
+                                          lightingModel: .unlit)
+        material.faceCulling = .front
+        if let outlineWidthTexture = mtoon.outlineWidthMultiplyTexture {
+            material.clearcoat.texture = try customTexture(withTextureIndex: outlineWidthTexture.index, semantic: .color)
+        } else {
+            material.clearcoat.texture = try whiteCustomTexture()
+        }
+        if let uvMaskTexture = mtoon.uvAnimationMaskTexture {
+            material.ambientOcclusion.texture = try customTexture(withTextureIndex: uvMaskTexture.index, semantic: .color)
+        } else {
+            material.ambientOcclusion.texture = try whiteCustomTexture()
+        }
+        applyAlphaMode(mtoon.alphaMode, alphaCutoff: mtoon.alphaCutoff, to: &material)
+        material.blending = .opaque
+        let parameters = MToonMaterialParameters(mtoon)
+        material.custom.value = parameters.customValue
+        material.custom.texture = CustomMaterial.Texture(try parameters.textureResource())
+        return material
+    }
+
+    func currentMaterialColor(withMaterialIndex index: Int,
+                              type: VRM1.Expressions.Expression.MaterialColorBind.MaterialColorType) throws -> SIMD4<Float> {
+        if let color = try mtoonParameters(withMaterialIndex: index)?.color(for: type) {
+            return color
+        }
+        return try material(withMaterialIndex: index).currentColor(for: type)
+    }
+
+    private func mtoonParameters(withMaterialIndex index: Int) throws -> MToonMaterialParameters? {
+        if let parameters = mtoonParameterCache[index] {
+            return parameters
+        }
+        guard let descriptor = try mtoonDescriptor(withMaterialIndex: index) else {
+            return nil
+        }
+        let parameters = MToonMaterialParameters(descriptor)
+        mtoonParameterCache[index] = parameters
+        return parameters
+    }
+
+    private func mtoonOutlineMaterial(withMaterialIndex index: Int) throws -> Material? {
+        if let material = mtoonOutlineMaterialCache[index] {
+            return material
+        }
+        guard let descriptor = try mtoonDescriptor(withMaterialIndex: index),
+              descriptor.hasOutline,
+              let library = try mtoonShaderLibrary(for: descriptor) else {
+            return nil
+        }
+        let material = try customMToonOutlineMaterial(descriptor, library: library)
+        mtoonOutlineMaterialCache[index] = material
+        return material
+    }
+
+    private func mtoonDescriptor(withMaterialIndex index: Int) throws -> MToonMaterialDescriptor? {
+        let materials = try gltf.load(\.materials)
+        guard materials.indices.contains(index) else {
+            throw VRMError._dataInconsistent("Material index \(index) out of bounds")
+        }
+        let gltfMaterial = materials[index]
+        let materialProperty: VRM0.MaterialProperty? = {
+            guard case .v0(let vrm0) = vrm,
+                  let name = gltfMaterial.name else { return nil }
+            return vrm0.materialPropertyNameMap[name]
+        }()
+        return MToonMaterialDescriptor(material: gltfMaterial, materialProperty: materialProperty)
+    }
+
+    private func mtoonShaderLibrary(for mtoon: MToonMaterialDescriptor) throws -> MTLLibrary? {
+        let variant = try mtoonSamplerVariant(for: mtoon)
+        if let library = Self.mtoonLibraryCache[variant] {
+            return library
+        }
+        guard let device = Self.mtoonShaderDevice else {
+            Self.logger.error("Failed to create Metal device for MToon shader.")
+            return nil
+        }
+#if (os(iOS) || os(visionOS)) && !targetEnvironment(simulator)
+        // Runtime Metal source compilation is not used on physical iOS or visionOS devices.
+        // Sampler constexpr variants therefore fall back to the precompiled default sampler set here.
+        if let library = Self.mtoonDefaultLibrary(device: device) {
+            Self.mtoonLibraryCache[variant] = library
+            return library
+        }
+#endif
+        guard let source = Self.mtoonShaderSource else {
+            return Self.mtoonDefaultLibrary(device: device)
+        }
+        do {
+            let library = try device.makeLibrary(source: source.applying(variant), options: nil)
+            Self.mtoonLibraryCache[variant] = library
+            return library
+        } catch {
+            Self.logger.error("Failed to compile MToon shader: \(error.localizedDescription, privacy: .public)")
+            return Self.mtoonDefaultLibrary(device: device)
+        }
+    }
+
+    private static func mtoonDefaultLibrary(device: MTLDevice) -> MTLLibrary? {
+        if let library = mtoonDefaultLibraryCache {
+            return library
+        }
+        do {
+            let library = try device.makeDefaultLibrary(bundle: .module)
+            mtoonDefaultLibraryCache = library
+            return library
+        } catch {
+            logger.error("Failed to load compiled MToon shader library: \(error.localizedDescription, privacy: .public)")
+            return nil
+        }
+    }
+
+    private static func loadMToonShaderSource() -> String? {
+        guard let url = Bundle.module.url(forResource: "MToon",
+                                          withExtension: "metal",
+                                          subdirectory: "Shaders") else {
+            logger.error("Failed to find MToon.metal resource.")
+            return nil
+        }
+        do {
+            let source = try String(contentsOf: url)
+            guard let header = realityKitShaderHeaderSource() else {
+                logger.warning("Failed to find RealityKit shader header; falling back to default MToon library when source compilation fails.")
+                return source
+            }
+            return source.replacingOccurrences(of: "#include <RealityKit/RealityKit.h>",
+                                                with: header)
+        } catch {
+            logger.error("Failed to read MToon shader: \(error.localizedDescription, privacy: .public)")
+            return nil
+        }
+    }
+
+    private static func realityKitShaderHeaderSource() -> String? {
+        guard let headerDirectory = realityKitHeaderDirectory() else { return nil }
+        let headerNames = [
+            "RealityKitTypes.h",
+            "RealityKitMaterialParameters.h",
+            "RealityKitTextures.h",
+            "RealityKitGeometryModifier.h",
+            "RealityKitSurfaceShader.h"
+        ]
+        do {
+            let headers = try headerNames.map { name -> String in
+                let url = headerDirectory.appendingPathComponent(name)
+                let source = try String(contentsOf: url)
+                return source
+                    .components(separatedBy: .newlines)
+                    .filter { !$0.contains("<RealityKit/") }
+                    .joined(separator: "\n")
+            }.joined(separator: "\n")
+            return """
+            #define __REALITYKIT_INDIRECT
+            \(headers)
+            #undef __REALITYKIT_INDIRECT
+            """
+        } catch {
+            logger.error("Failed to read RealityKit shader headers: \(error.localizedDescription, privacy: .public)")
+            return nil
+        }
+    }
+
+    private static func realityKitHeaderDirectory() -> URL? {
+        let fileManager = FileManager.default
+        let relativePath = "System/Library/Frameworks/RealityKit.framework/Headers"
+        let environment = ProcessInfo.processInfo.environment
+        var candidates: [URL] = []
+        if let sdkRoot = ProcessInfo.processInfo.environment["SDKROOT"] {
+            candidates.append(URL(fileURLWithPath: sdkRoot).appendingPathComponent(relativePath))
+        }
+        if let developerDirectory = environment["DEVELOPER_DIR"] {
+            candidates.append(contentsOf: developerSDKCandidates(developerDirectory: developerDirectory,
+                                                                 relativePath: relativePath))
+        }
+#if os(macOS)
+        candidates.append(contentsOf: xcrunSDKRootCandidates().map { $0.appendingPathComponent(relativePath) })
+#endif
+        candidates.append(contentsOf: [
+            URL(fileURLWithPath: "/Applications/Xcode.app/Contents/Developer"),
+            URL(fileURLWithPath: "/Applications/Xcode-beta.app/Contents/Developer")
+        ].flatMap {
+            developerSDKCandidates(developerDirectory: $0.path, relativePath: relativePath)
+        })
+
+        var visited = Set<String>()
+        return candidates.first { candidate in
+            visited.insert(candidate.path).inserted &&
+            fileManager.fileExists(atPath: candidate.appendingPathComponent("RealityKit.h").path)
+        }
+    }
+
+    private static func developerSDKCandidates(developerDirectory: String, relativePath: String) -> [URL] {
+        let developerURL = URL(fileURLWithPath: developerDirectory)
+        let platformSDKs: [(platform: String, sdk: String)] = [
+            ("MacOSX.platform", "MacOSX.sdk"),
+            ("iPhoneOS.platform", "iPhoneOS.sdk"),
+            ("iPhoneSimulator.platform", "iPhoneSimulator.sdk"),
+            ("XROS.platform", "XROS.sdk"),
+            ("XRSimulator.platform", "XRSimulator.sdk")
+        ]
+        return platformSDKs.map { platform, sdk in
+            developerURL
+                .appendingPathComponent("Platforms")
+                .appendingPathComponent(platform)
+                .appendingPathComponent("Developer")
+                .appendingPathComponent("SDKs")
+                .appendingPathComponent(sdk)
+                .appendingPathComponent(relativePath)
+        }
+    }
+
+#if os(macOS)
+    private static func xcrunSDKRootCandidates() -> [URL] {
+        ["macosx", "iphoneos", "iphonesimulator", "xros", "xrsimulator"].compactMap { sdkName in
+            xcrunSDKRoot(sdkName: sdkName)
+        }
+    }
+
+    private static func xcrunSDKRoot(sdkName: String) -> URL? {
+        let process = Process()
+        let output = Pipe()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/xcrun")
+        process.arguments = ["--sdk", sdkName, "--show-sdk-path"]
+        process.standardOutput = output
+        process.standardError = Pipe()
+        do {
+            try process.run()
+            process.waitUntilExit()
+        } catch {
+            return nil
+        }
+        guard process.terminationStatus == 0 else { return nil }
+        let data = output.fileHandleForReading.readDataToEndOfFile()
+        guard let path = String(data: data, encoding: .utf8)?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+              !path.isEmpty else {
+            return nil
+        }
+        return URL(fileURLWithPath: path)
+    }
+#endif
+
     func texture(withTextureIndex index: Int, semantic: TextureResource.Semantic = .color) throws -> TextureResource {
         if semantic == .color, let cache = try entityData.load(\.textures, index: index) {
             return cache
@@ -550,6 +914,71 @@ open class VRMEntityLoader {
         return MaterialParameters.Texture(texture, sampler: sampler)
     }
 
+    private func customTexture(withTextureIndex index: Int,
+                               semantic: TextureResource.Semantic = .color) throws -> CustomMaterial.Texture {
+        CustomMaterial.Texture(try texture(withTextureIndex: index, semantic: semantic))
+    }
+
+    private func whiteTextureParameter() throws -> MaterialParameters.Texture {
+        return MaterialParameters.Texture(try whiteTextureResource(), sampler: defaultSampler())
+    }
+
+    private func whiteCustomTexture() throws -> CustomMaterial.Texture {
+        CustomMaterial.Texture(try whiteTextureResource())
+    }
+
+    private func neutralNormalCustomTexture() throws -> CustomMaterial.Texture {
+        CustomMaterial.Texture(try neutralNormalTextureResource())
+    }
+
+    private func whiteTextureResource() throws -> TextureResource {
+        if let whiteTextureCache {
+            return whiteTextureCache
+        }
+        let data = Data([255, 255, 255, 255])
+        guard let provider = CGDataProvider(data: data as CFData),
+              let image = CGImage(width: 1,
+                                  height: 1,
+                                  bitsPerComponent: 8,
+                                  bitsPerPixel: 32,
+                                  bytesPerRow: 4,
+                                  space: CGColorSpaceCreateDeviceRGB(),
+                                  bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedLast.rawValue),
+                                  provider: provider,
+                                  decode: nil,
+                                  shouldInterpolate: false,
+                                  intent: .defaultIntent) else {
+            throw VRMError._dataInconsistent("failed to create white texture")
+        }
+        let texture = try TextureResource(image: image, options: .init(semantic: .color))
+        whiteTextureCache = texture
+        return texture
+    }
+
+    private func neutralNormalTextureResource() throws -> TextureResource {
+        if let neutralNormalTextureCache {
+            return neutralNormalTextureCache
+        }
+        let data = Data([128, 128, 255, 255])
+        guard let provider = CGDataProvider(data: data as CFData),
+              let image = CGImage(width: 1,
+                                  height: 1,
+                                  bitsPerComponent: 8,
+                                  bitsPerPixel: 32,
+                                  bytesPerRow: 4,
+                                  space: CGColorSpaceCreateDeviceRGB(),
+                                  bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedLast.rawValue),
+                                  provider: provider,
+                                  decode: nil,
+                                  shouldInterpolate: false,
+                                  intent: .defaultIntent) else {
+            throw VRMError._dataInconsistent("failed to create neutral normal texture")
+        }
+        let texture = try TextureResource(image: image, options: .init(semantic: .normal))
+        neutralNormalTextureCache = texture
+        return texture
+    }
+
     private func sampler(withTextureIndex index: Int) throws -> MaterialParameters.Texture.Sampler {
         if let cache = samplerCache[index] {
             return cache
@@ -564,6 +993,17 @@ open class VRMEntityLoader {
         }
         let sampler = MaterialParameters.Texture.Sampler(descriptor)
         samplerCache[index] = sampler
+        return sampler
+    }
+
+    private func defaultSampler() -> MaterialParameters.Texture.Sampler {
+        if let defaultSamplerCache {
+            return defaultSamplerCache
+        }
+        let descriptor = MTLSamplerDescriptor()
+        applyDefaultSampler(to: descriptor)
+        let sampler = MaterialParameters.Texture.Sampler(descriptor)
+        defaultSamplerCache = sampler
         return sampler
     }
 
@@ -585,6 +1025,35 @@ open class VRMEntityLoader {
         descriptor.mipFilter = mip
         descriptor.sAddressMode = metalWrap(.REPEAT)
         descriptor.tAddressMode = metalWrap(.REPEAT)
+    }
+
+    private func mtoonSamplerVariant(for mtoon: MToonMaterialDescriptor) throws -> MToonSamplerVariant {
+        try MToonSamplerVariant(base: mtoonSamplerKey(for: mtoon.baseColorTexture),
+                                shade: mtoonSamplerKey(for: mtoon.shadeMultiplyTexture ?? mtoon.baseColorTexture),
+                                shadingShift: mtoonSamplerKey(for: mtoon.shadingShiftTexture),
+                                normal: mtoonSamplerKey(for: mtoon.normalTexture),
+                                matcap: mtoonSamplerKey(for: mtoon.matcapTexture),
+                                rim: mtoonSamplerKey(for: mtoon.rimMultiplyTexture),
+                                outlineWidth: mtoonSamplerKey(for: mtoon.outlineWidthMultiplyTexture),
+                                uvAnimationMask: mtoonSamplerKey(for: mtoon.uvAnimationMaskTexture))
+    }
+
+    private func mtoonSamplerKey(for texture: MToonMaterialDescriptor.Texture?) throws -> MToonSamplerKey {
+        guard let texture else {
+            return .default
+        }
+        let textures = try gltf.load(\.textures)
+        guard textures.indices.contains(texture.index) else {
+            throw VRMError._dataInconsistent("Texture index \(texture.index) out of bounds")
+        }
+        guard let samplerIndex = textures[texture.index].sampler else {
+            return .default
+        }
+        let samplers = try gltf.load(\.samplers)
+        guard samplers.indices.contains(samplerIndex) else {
+            throw VRMError._dataInconsistent("Sampler index \(samplerIndex) out of bounds")
+        }
+        return MToonSamplerKey(samplers[samplerIndex])
     }
 
     private func metalFilter(_ filter: GLTF.Sampler.MagFilter) -> MTLSamplerMinMagFilter {
@@ -750,6 +1219,22 @@ open class VRMEntityLoader {
     private func applyAlphaMode(_ mode: GLTF.Material.AlphaMode,
                                 alphaCutoff: Float,
                                 to material: inout PhysicallyBasedMaterial) {
+        switch mode {
+        case .OPAQUE:
+            material.blending = .opaque
+            material.opacityThreshold = nil
+        case .MASK:
+            material.blending = .opaque
+            material.opacityThreshold = alphaCutoff
+        case .BLEND:
+            material.blending = .transparent(opacity: .init(scale: 1.0))
+            material.opacityThreshold = nil
+        }
+    }
+
+    private func applyAlphaMode(_ mode: GLTF.Material.AlphaMode,
+                                alphaCutoff: Float,
+                                to material: inout CustomMaterial) {
         switch mode {
         case .OPAQUE:
             material.blending = .opaque
@@ -1445,6 +1930,126 @@ open class VRMEntityLoader {
                                     normalOffsets: normalOffsets,
                                     tangentOffsets: tangentOffsets,
                                     indexData: indexData)
+    }
+}
+
+private struct MToonSamplerVariant: Hashable {
+    let base: MToonSamplerKey
+    let shade: MToonSamplerKey
+    let shadingShift: MToonSamplerKey
+    let normal: MToonSamplerKey
+    let matcap: MToonSamplerKey
+    let rim: MToonSamplerKey
+    let outlineWidth: MToonSamplerKey
+    let uvAnimationMask: MToonSamplerKey
+}
+
+private struct MToonSamplerKey: Hashable {
+    static let `default` = MToonSamplerKey(wrapS: "repeat",
+                                          wrapT: "repeat",
+                                          magFilter: "linear",
+                                          minFilter: "linear",
+                                          mipFilter: "linear")
+
+    let wrapS: String
+    let wrapT: String
+    let magFilter: String
+    let minFilter: String
+    let mipFilter: String
+
+    init(_ sampler: GLTF.Sampler) {
+        let minFilters = Self.filters(sampler.minFilter ?? .LINEAR_MIPMAP_LINEAR)
+        wrapS = Self.wrap(sampler.wrapS)
+        wrapT = Self.wrap(sampler.wrapT)
+        magFilter = Self.filter(sampler.magFilter ?? .LINEAR)
+        minFilter = minFilters.min
+        mipFilter = minFilters.mip
+    }
+
+    private init(wrapS: String,
+                 wrapT: String,
+                 magFilter: String,
+                 minFilter: String,
+                 mipFilter: String) {
+        self.wrapS = wrapS
+        self.wrapT = wrapT
+        self.magFilter = magFilter
+        self.minFilter = minFilter
+        self.mipFilter = mipFilter
+    }
+
+    func source(named name: String) -> String {
+        """
+        constexpr sampler \(name)(coord::normalized,
+                                           s_address::\(wrapS),
+                                           t_address::\(wrapT),
+                                           mag_filter::\(magFilter),
+                                           min_filter::\(minFilter),
+                                           mip_filter::\(mipFilter));
+        """
+    }
+
+    private static func wrap(_ wrap: GLTF.Sampler.Wrap) -> String {
+        switch wrap {
+        case .CLAMP_TO_EDGE: return "clamp_to_edge"
+        case .MIRRORED_REPEAT: return "mirrored_repeat"
+        case .REPEAT: return "repeat"
+        }
+    }
+
+    private static func filter(_ filter: GLTF.Sampler.MagFilter) -> String {
+        switch filter {
+        case .NEAREST: return "nearest"
+        case .LINEAR: return "linear"
+        }
+    }
+
+    private static func filters(_ filter: GLTF.Sampler.MinFilter) -> (min: String, mip: String) {
+        switch filter {
+        case .NEAREST:
+            return ("nearest", "none")
+        case .LINEAR:
+            return ("linear", "none")
+        case .NEAREST_MIPMAP_NEAREST:
+            return ("nearest", "nearest")
+        case .LINEAR_MIPMAP_NEAREST:
+            return ("linear", "nearest")
+        case .NEAREST_MIPMAP_LINEAR:
+            return ("nearest", "linear")
+        case .LINEAR_MIPMAP_LINEAR:
+            return ("linear", "linear")
+        }
+    }
+}
+
+private extension String {
+    func applying(_ variant: MToonSamplerVariant) -> String {
+        replacingSampler(named: "mtoonBaseSampler", with: variant.base)
+            .replacingSampler(named: "mtoonShadeSampler", with: variant.shade)
+            .replacingSampler(named: "mtoonShadingShiftSampler", with: variant.shadingShift)
+            .replacingSampler(named: "mtoonNormalSampler", with: variant.normal)
+            .replacingSampler(named: "mtoonMatcapSampler", with: variant.matcap)
+            .replacingSampler(named: "mtoonRimSampler", with: variant.rim)
+            .replacingSampler(named: "mtoonOutlineWidthSampler", with: variant.outlineWidth)
+            .replacingSampler(named: "mtoonUvAnimationMaskSampler", with: variant.uvAnimationMask)
+    }
+
+    private func replacingSampler(named name: String, with key: MToonSamplerKey) -> String {
+        guard let start = range(of: "constexpr sampler \(name)("),
+              let end = range(of: ");", range: start.lowerBound..<endIndex) else {
+            return self
+        }
+        return replacingCharacters(in: start.lowerBound..<end.upperBound,
+                                   with: key.source(named: name))
+    }
+}
+
+private extension VRMColor {
+    convenience init(simd color: SIMD4<Float>) {
+        self.init(red: CGFloat(color.x),
+                  green: CGFloat(color.y),
+                  blue: CGFloat(color.z),
+                  alpha: CGFloat(color.w))
     }
 }
 

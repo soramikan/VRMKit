@@ -156,6 +156,6 @@ final class ImmersiveViewModel {
         }
         
         vrmEntity.entity.transform.rotation = simd_quatf(angle: baseRotation + angle, axis: SIMD3<Float>(0, 1, 0))
-        vrmEntity.update(at: deltaTime)
+        vrmEntity.update(at: time)
     }
 }

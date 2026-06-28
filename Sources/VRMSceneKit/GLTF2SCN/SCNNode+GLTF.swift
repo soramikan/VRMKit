@@ -17,9 +17,13 @@ extension SCNNode {
                 let ibm = try skin.inverseBindMatrices.map(loader.inverseBindMatrix)
                 let skeleton = try skin.skeleton.map(loader.node)
                 for primitive in meshNode.childNodes {
-                    primitive.skinner = try? loader.skin(
+                    guard let geometry = primitive.geometry,
+                          geometry.hasSkinningSources else {
+                        continue
+                    }
+                    primitive.skinner = try loader.skin(
                         withSkinIndex: skinIndex,
-                        primitiveGeometry: primitive.geometry!, // swiftlint:disable:this force_unwrap
+                        primitiveGeometry: geometry,
                         bones: joints,
                         boneInverseBindTransform: ibm)
                     primitive.skinner?.skeleton = skeleton ?? primitive
@@ -47,6 +51,7 @@ extension SCNNode {
 
         for primitive in mesh.primitives {
             let node = SCNNode()
+            let materialIndex = primitive.material
             var attributes = try loader.attributes(primitive.attributes.rawValue)
             let vertex = attributes.first { $0.semantic == .vertex }
             let hasNormal = attributes.contains { $0.semantic == .normal }
@@ -64,7 +69,7 @@ extension SCNNode {
 
             let geometry = SCNGeometry(sources: attributes, elements: elements); do {
                 geometry.materials = try {
-                    if let materialIndex = primitive.material {
+                    if let materialIndex {
                         return [try loader.material(withMaterialIndex: materialIndex)]
                     } else {
                         return [.default]
@@ -81,7 +86,7 @@ extension SCNNode {
             }
 
             if let targets = primitive.targets, !targets.isEmpty {
-                morpher = try SCNMorpher(primitiveTargets: targets, loader: loader)
+                morpher = try SCNMorpher(primitiveTargets: targets, baseSources: attributes, loader: loader)
                 node.morpher = morpher
 //                let path = "childNodes[0].childNodes[\(primitiveIndex)].morpher.weights[\(index)]"
             } else {
@@ -89,7 +94,28 @@ extension SCNNode {
             }
 
             addChildNode(node)
+            if let materialIndex,
+               let outlineMaterial = node.geometry?.materials.first?.mtoonOutlineMaterial(),
+               let outlineGeometry = node.geometry?.copy() as? SCNGeometry {
+                outlineGeometry.materials = [outlineMaterial]
+                let outlineNode = SCNNode(geometry: outlineGeometry)
+                outlineNode.name = node.name.map { "\($0)_outline" }
+                if let targets = primitive.targets, !targets.isEmpty {
+                    outlineNode.morpher = try SCNMorpher(primitiveTargets: targets,
+                                                         baseSources: attributes,
+                                                         loader: loader)
+                }
+                outlineNode.renderingOrder = node.renderingOrder == 0 ? 1 : node.renderingOrder + 1
+                loader.registerMToonOutlineMaterial(outlineMaterial, materialIndex: materialIndex)
+                addChildNode(outlineNode)
+            }
         }
+    }
+}
+
+private extension SCNGeometry {
+    var hasSkinningSources: Bool {
+        sources(for: .boneWeights).first != nil && sources(for: .boneIndices).first != nil
     }
 }
 
