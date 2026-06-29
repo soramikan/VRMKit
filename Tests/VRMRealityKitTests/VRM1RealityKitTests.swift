@@ -9,6 +9,7 @@ import VRMKit
 @MainActor
 struct VRM1RealityKitTests {
 
+#if !os(visionOS)
     @Test
     func testVRM1MToonCustomMaterialUsesParameterTexture() throws {
         guard #available(iOS 18.0, macOS 15.0, visionOS 2.0, *) else { return }
@@ -51,6 +52,7 @@ struct VRM1RealityKitTests {
 
         #expect(updatedCustomMaterial.custom.value == initialValue)
     }
+#endif
 
     @Test
     func testFallbackShadeAndOutlineColorBindsDoNotOverwriteBaseColor() throws {
@@ -95,6 +97,7 @@ struct VRM1RealityKitTests {
         #expect(annotatedEntity.isEnabled == true)
     }
 
+#if !os(visionOS)
     @Test
     func testUpdateAtUsesDeltaTimeForMToonRuntime() throws {
         guard #available(iOS 18.0, macOS 15.0, visionOS 2.0, *) else { return }
@@ -127,6 +130,7 @@ struct VRM1RealityKitTests {
 
         #expect(!outlineEntities.isEmpty)
     }
+#endif
 
     private func modelEntities(in root: Entity) -> [ModelEntity] {
         var result: [ModelEntity] = []
@@ -140,6 +144,7 @@ struct VRM1RealityKitTests {
         return result
     }
 
+#if !os(visionOS)
     private func firstCustomMaterial(in root: Entity) throws -> CustomMaterial {
         for modelEntity in modelEntities(in: root) {
             guard let model = modelEntity.components[ModelComponent.self] else { continue }
@@ -149,6 +154,7 @@ struct VRM1RealityKitTests {
         }
         throw VRMError.dataInconsistent("Expected at least one CustomMaterial")
     }
+#endif
 
     private func mtoonShaderSource() throws -> String {
         let testFile = URL(fileURLWithPath: #filePath)
