@@ -438,6 +438,7 @@ public final class VRMEntity {
     }
 
     private func updateMToonRuntime(deltaTime: Float) {
+#if !os(visionOS)
         mtoonElapsedTime += deltaTime
         for modelEntity in modelEntities(in: entity) {
             guard var state = modelEntity.components[MToonMaterialParametersComponent.self],
@@ -448,12 +449,16 @@ public final class VRMEntity {
             modelEntity.components.set(state)
             modelEntity.components.set(component)
         }
+#endif
     }
 
     private func updateMToonColor(_ color: SIMD4<Float>,
                                   type: VRM1.Expressions.Expression.MaterialColorBind.MaterialColorType,
                                   on modelEntity: ModelEntity,
                                   modelComponent: inout ModelComponent) -> Bool {
+#if os(visionOS)
+        return false
+#else
         guard var state = modelEntity.components[MToonMaterialParametersComponent.self] else { return false }
         guard state.parameters.setColor(color, for: type) else { return false }
         state.parameters.lightDirection = mtoonLightDirection
@@ -461,8 +466,10 @@ public final class VRMEntity {
         applyMToonParameters(state.parameters, to: &modelComponent, updateParameterTexture: true)
         modelEntity.components.set(state)
         return true
+#endif
     }
 
+#if !os(visionOS)
     private func applyMToonParameters(_ parameters: MToonMaterialParameters,
                                       to component: inout ModelComponent,
                                       updateParameterTexture: Bool) {
@@ -475,6 +482,7 @@ public final class VRMEntity {
             return material
         }
     }
+#endif
 
     private func expressionClip(for key: ExpressionKey) -> ExpressionClip? {
         if let clip = expressionClips[key] { return clip }
@@ -813,8 +821,10 @@ extension Material {
         switch self {
         case let material as UnlitMaterial:
             return material.textureCoordinateTransform
+#if !os(visionOS)
         case let material as CustomMaterial:
             return material.textureCoordinateTransform
+#endif
         case let material as PhysicallyBasedMaterial:
             return material.textureCoordinateTransform
         default:
@@ -831,6 +841,7 @@ extension Material {
             case .emissionColor, .shadeColor, .matcapColor, .rimColor, .outlineColor:
                 return SIMD4<Float>(1, 1, 1, 1)
             }
+#if !os(visionOS)
         case let material as CustomMaterial:
             switch type {
             case .color:
@@ -840,6 +851,7 @@ extension Material {
             case .emissionColor, .shadeColor, .matcapColor, .outlineColor:
                 return SIMD4<Float>(1, 1, 1, 1)
             }
+#endif
         case let material as PhysicallyBasedMaterial:
             switch type {
             case .color:
@@ -862,9 +874,11 @@ extension Material {
         case var material as UnlitMaterial:
             material.textureCoordinateTransform = transform
             return material
+#if !os(visionOS)
         case var material as CustomMaterial:
             material.textureCoordinateTransform = transform
             return material
+#endif
         case var material as PhysicallyBasedMaterial:
             material.textureCoordinateTransform = transform
             return material
@@ -884,6 +898,7 @@ extension Material {
                 break
             }
             return material
+#if !os(visionOS)
         case var material as CustomMaterial:
             switch type {
             case .color:
@@ -894,6 +909,7 @@ extension Material {
                 break
             }
             return material
+#endif
         case var material as PhysicallyBasedMaterial:
             switch type {
             case .color:

@@ -23,6 +23,12 @@ open class VRMEntityLoader {
     private static let mtoonShaderSource = loadMToonShaderSource()
     private static var mtoonLibraryCache: [MToonSamplerVariant: MTLLibrary] = [:]
     private static var mtoonDefaultLibraryCache: MTLLibrary?
+    private static let requiredMToonFunctionNames: Set<String> = [
+        "mtoonSurface",
+        "mtoonGeometry",
+        "mtoonOutlineSurface",
+        "mtoonOutlineGeometry"
+    ]
     private var textureCacheBySemantic: [TextureResource.Semantic: [Int: TextureResource]] = [:]
     private var metallicRoughnessCache: [Int: (metal: TextureResource, rough: TextureResource)] = [:]
     private var samplerCache: [Int: MaterialParameters.Texture.Sampler] = [:]
@@ -497,11 +503,13 @@ open class VRMEntityLoader {
                            alpha: CGFloat(factor.a))
         }()
 
+#if !os(visionOS)
         if let mtoon, let library = try mtoonShaderLibrary(for: mtoon) {
             let material = try customMToonMaterial(mtoon, library: library)
             entityData.materials[index] = material
             return material
         }
+#endif
 
         if useUnlit {
             var material = UnlitMaterial()
@@ -574,6 +582,7 @@ open class VRMEntityLoader {
         return material
     }
 
+#if !os(visionOS)
     private func customMToonMaterial(_ mtoon: MToonMaterialDescriptor,
                                      library: MTLLibrary) throws -> Material {
         let surface = CustomMaterial.SurfaceShader(named: "mtoonSurface", in: library)
@@ -663,6 +672,7 @@ open class VRMEntityLoader {
         material.custom.texture = CustomMaterial.Texture(try parameters.textureResource())
         return material
     }
+#endif
 
     func currentMaterialColor(withMaterialIndex index: Int,
                               type: VRM1.Expressions.Expression.MaterialColorBind.MaterialColorType) throws -> SIMD4<Float> {
@@ -685,6 +695,9 @@ open class VRMEntityLoader {
     }
 
     private func mtoonOutlineMaterial(withMaterialIndex index: Int) throws -> Material? {
+#if os(visionOS)
+        return nil
+#else
         if let material = mtoonOutlineMaterialCache[index] {
             return material
         }
@@ -696,6 +709,7 @@ open class VRMEntityLoader {
         let material = try customMToonOutlineMaterial(descriptor, library: library)
         mtoonOutlineMaterialCache[index] = material
         return material
+#endif
     }
 
     private func mtoonDescriptor(withMaterialIndex index: Int) throws -> MToonMaterialDescriptor? {
@@ -748,6 +762,10 @@ open class VRMEntityLoader {
         }
         do {
             let library = try device.makeDefaultLibrary(bundle: .module)
+            guard requiredMToonFunctionNames.isSubset(of: Set(library.functionNames)) else {
+                logger.warning("Compiled MToon shader library is unavailable for this SDK.")
+                return nil
+            }
             mtoonDefaultLibraryCache = library
             return library
         } catch {
@@ -914,15 +932,18 @@ open class VRMEntityLoader {
         return MaterialParameters.Texture(texture, sampler: sampler)
     }
 
+#if !os(visionOS)
     private func customTexture(withTextureIndex index: Int,
                                semantic: TextureResource.Semantic = .color) throws -> CustomMaterial.Texture {
         CustomMaterial.Texture(try texture(withTextureIndex: index, semantic: semantic))
     }
+#endif
 
     private func whiteTextureParameter() throws -> MaterialParameters.Texture {
         return MaterialParameters.Texture(try whiteTextureResource(), sampler: defaultSampler())
     }
 
+#if !os(visionOS)
     private func whiteCustomTexture() throws -> CustomMaterial.Texture {
         CustomMaterial.Texture(try whiteTextureResource())
     }
@@ -930,6 +951,7 @@ open class VRMEntityLoader {
     private func neutralNormalCustomTexture() throws -> CustomMaterial.Texture {
         CustomMaterial.Texture(try neutralNormalTextureResource())
     }
+#endif
 
     private func whiteTextureResource() throws -> TextureResource {
         if let whiteTextureCache {
@@ -1232,6 +1254,7 @@ open class VRMEntityLoader {
         }
     }
 
+#if !os(visionOS)
     private func applyAlphaMode(_ mode: GLTF.Material.AlphaMode,
                                 alphaCutoff: Float,
                                 to material: inout CustomMaterial) {
@@ -1247,6 +1270,7 @@ open class VRMEntityLoader {
             material.opacityThreshold = nil
         }
     }
+#endif
 
     private struct AccessorSlice {
         let data: Data
