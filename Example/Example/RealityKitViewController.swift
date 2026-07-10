@@ -21,6 +21,10 @@ final class RealityKitViewController: UIViewController, UIGestureRecognizerDeleg
     private var orbitTarget = SIMD3<Float>(0, 0.8, 0)
     private var currentModel: VRMExampleModel = .alicia
     private var currentExpression: ExampleExpression = .neutral
+    private var currentMotion: VRMAExampleMotion = .none
+    private var vrmaPlayer: VRMAPlayer?
+    private var vrmaRetargetingContext: VRMARetargetingContext?
+    private var motionButton: UIButton?
 
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -65,12 +69,43 @@ final class RealityKitViewController: UIViewController, UIGestureRecognizerDeleg
         view.addSubview(expressionSegmentedControl)
         self.expressionSegmentedControl = expressionSegmentedControl
 
+        let motionButton = makeMotionButton()
+        motionButton.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(motionButton)
+        self.motionButton = motionButton
+
         NSLayoutConstraint.activate([
             segmentedControl.centerXAnchor.constraint(equalTo: view.centerXAnchor),
             segmentedControl.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -50),
             expressionSegmentedControl.centerXAnchor.constraint(equalTo: view.centerXAnchor),
-            expressionSegmentedControl.bottomAnchor.constraint(equalTo: segmentedControl.topAnchor, constant: -20)
+            expressionSegmentedControl.bottomAnchor.constraint(equalTo: segmentedControl.topAnchor, constant: -20),
+            motionButton.centerXAnchor.constraint(equalTo: view.centerXAnchor),
+            motionButton.bottomAnchor.constraint(equalTo: expressionSegmentedControl.topAnchor, constant: -20)
         ])
+    }
+
+    private func makeMotionButton() -> UIButton {
+        let button = UIButton(type: .system)
+        button.setTitle("Motion: \(currentMotion.displayName)", for: .normal)
+        button.showsMenuAsPrimaryAction = true
+        button.menu = makeMotionMenu()
+        return button
+    }
+
+    private func makeMotionMenu() -> UIMenu {
+        let actions = VRMAExampleMotion.allCases.map { motion in
+            UIAction(title: motion.displayName, state: currentMotion == motion ? .on : .off) { [weak self] _ in
+                self?.selectMotion(motion)
+            }
+        }
+        return UIMenu(title: "Motion", children: actions)
+    }
+
+    private func selectMotion(_ motion: VRMAExampleMotion) {
+        currentMotion = motion
+        motionButton?.setTitle("Motion: \(motion.displayName)", for: .normal)
+        motionButton?.menu = makeMotionMenu()
+        loadVRM(model: currentModel)
     }
 
     @objc private func segmentChanged(_ sender: UISegmentedControl) {
@@ -99,6 +134,8 @@ final class RealityKitViewController: UIViewController, UIGestureRecognizerDeleg
             arView.scene.removeAnchor(loadedAnchor)
             self.loadedAnchor = nil
         }
+        updateSubscription?.cancel()
+        updateSubscription = nil
 
         do {
             let loader = try VRMEntityLoader(named: model.rawValue)
@@ -114,39 +151,44 @@ final class RealityKitViewController: UIViewController, UIGestureRecognizerDeleg
             updateOrbitTarget(for: vrmEntity.entity, adjustDistance: false)
             updateCameraTransform()
 
-            let neck = vrmEntity.humanoid.node(for: .neck)
-            let leftArm: Entity?
-            let rightArm: Entity?
-            switch vrmEntity.vrm {
-            case .v1:
-                leftArm = vrmEntity.humanoid.node(for: .leftShoulder)
-                rightArm = vrmEntity.humanoid.node(for: .rightShoulder)
-            case .v0:
-                leftArm = vrmEntity.humanoid.node(for: .leftUpperArm)
-                rightArm = vrmEntity.humanoid.node(for: .rightUpperArm)
-            }
-
-            let neckRotation = simd_quatf(angle: 20 * .pi / 180, axis: SIMD3<Float>(0, 0, 1))
-            let armRotation = simd_quatf(angle: 40 * .pi / 180, axis: SIMD3<Float>(0, 0, 1))
-            if let neck {
-                neck.transform.rotation = neck.transform.rotation * neckRotation
-            }
-            if let leftArm {
-                leftArm.transform.rotation = leftArm.transform.rotation * armRotation
-            }
-            if let rightArm {
-                rightArm.transform.rotation = rightArm.transform.rotation * armRotation
-            }
             vrmEntity.setExampleExpression(currentExpression, value: 1.0)
 
             loadedEntity = vrmEntity
             loadedAnchor = anchor
 
+            if currentMotion == .none {
+                let neck = vrmEntity.humanoid.node(for: .neck)
+                let leftArm: Entity?
+                let rightArm: Entity?
+                switch vrmEntity.vrm {
+                case .v1:
+                    leftArm = vrmEntity.humanoid.node(for: .leftShoulder)
+                    rightArm = vrmEntity.humanoid.node(for: .rightShoulder)
+                case .v0:
+                    leftArm = vrmEntity.humanoid.node(for: .leftUpperArm)
+                    rightArm = vrmEntity.humanoid.node(for: .rightUpperArm)
+                }
+
+                let neckRotation = simd_quatf(angle: 20 * .pi / 180, axis: SIMD3<Float>(0, 0, 1))
+                let armRotation = simd_quatf(angle: 40 * .pi / 180, axis: SIMD3<Float>(0, 0, 1))
+                if let neck {
+                    neck.transform.rotation = neck.transform.rotation * neckRotation
+                }
+                if let leftArm {
+                    leftArm.transform.rotation = leftArm.transform.rotation * armRotation
+                }
+                if let rightArm {
+                    rightArm.transform.rotation = rightArm.transform.rotation * armRotation
+                }
+            } else {
+                loadCurrentMotion()
+            }
+
             let rotationOffset = model.initialRotation
 
             var time: TimeInterval = 0
             updateSubscription = arView.scene.subscribe(to: SceneEvents.Update.self) { [weak self] event in
-                guard let loadedEntity = self?.loadedEntity else { return }
+                guard let self, let loadedEntity = self.loadedEntity else { return }
 
                 time += event.deltaTime
 
@@ -160,12 +202,45 @@ final class RealityKitViewController: UIViewController, UIGestureRecognizerDeleg
                     angle = -0.5 + 0.5 * progress
                 }
 
-                loadedEntity.entity.transform.rotation = simd_quatf(angle: rotationOffset + angle, axis: SIMD3<Float>(0, 1, 0))
+                if var player = self.vrmaPlayer {
+                    let sample = player.update(deltaTime: Float(event.deltaTime))
+                    self.vrmaPlayer = player
+                    loadedEntity.apply(vrmaSample: sample, retargetingContext: self.vrmaRetargetingContext)
+                }
 
+                let rootAngle = self.currentMotion == .none ? rotationOffset + angle : rotationOffset
+                loadedEntity.entity.transform.rotation = simd_quatf(angle: rootAngle, axis: SIMD3<Float>(0, 1, 0))
                 loadedEntity.update(at: time)
             }
         } catch {
             print(error)
+        }
+    }
+
+    private func loadCurrentMotion() {
+        guard currentMotion != .none, let loadedEntity else {
+            vrmaPlayer = nil
+            vrmaRetargetingContext = nil
+            return
+        }
+        do {
+            guard let url = Bundle.main.url(forResource: currentMotion.rawValue,
+                                            withExtension: "vrma",
+                                            subdirectory: "VRMA") else {
+                throw URLError(.fileDoesNotExist)
+            }
+            let loader = VRMAAnimationLoader()
+            let vrma = try loader.load(withURL: url)
+            let clip = try loader.loadClip(from: vrma)
+            vrmaRetargetingContext = loadedEntity.makeVRMARetargetingContext(for: clip)
+            vrmaPlayer = VRMAPlayer(clip: clip, isPlaying: true, isLooping: true, playbackSpeed: 1.0)
+            if let sample = vrmaPlayer?.sample {
+                loadedEntity.apply(vrmaSample: sample, retargetingContext: vrmaRetargetingContext)
+            }
+        } catch {
+            print("VRMA load error: \(error)")
+            vrmaPlayer = nil
+            vrmaRetargetingContext = nil
         }
     }
 

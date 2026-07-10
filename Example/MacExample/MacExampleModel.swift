@@ -84,6 +84,34 @@ enum MacExampleExpression: String, CaseIterable, Identifiable {
     }
 }
 
+enum MacExampleMotion: String, CaseIterable, Identifiable {
+    case none
+    case motionPose = "001_motion_pose"
+    case dogeza = "002_dogeza"
+    case humidai = "003_humidai"
+    case hello1 = "004_hello_1"
+    case smartphone = "005_smartphone"
+    case drinkWater = "006_drinkwater"
+    case gekirei = "007_gekirei"
+    case gatan = "008_gatan"
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .none: return "None"
+        case .motionPose: return "Pose"
+        case .dogeza: return "Dogeza"
+        case .humidai: return "Humidai"
+        case .hello1: return "Hello"
+        case .smartphone: return "Phone"
+        case .drinkWater: return "Drink"
+        case .gekirei: return "Gekirei"
+        case .gatan: return "Gatan"
+        }
+    }
+}
+
 extension VRMEntity {
     func setExampleExpression(_ expression: MacExampleExpression, value: CGFloat) {
         switch vrm {

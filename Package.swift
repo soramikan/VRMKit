@@ -31,7 +31,11 @@ let package = Package(
         .testTarget(
             name: "VRMKitTests",
             dependencies: ["VRMKit"],
-            resources: [.copy("Assets/AliciaSolid.vrm"), .copy("Assets/Seed-san.vrm")]
+            resources: [
+                .copy("Assets/AliciaSolid.vrm"),
+                .copy("Assets/Seed-san.vrm"),
+                .copy("Assets/VRMA")
+            ]
         ),
         .testTarget(
             name: "VRMSceneKitTests",

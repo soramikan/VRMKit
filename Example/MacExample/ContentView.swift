@@ -20,6 +20,7 @@ struct ContentView: View {
     @State private var selectedRenderer: MacExampleRenderer = .realityKit
     @State private var selectedModel: MacExampleModel = .alicia
     @State private var selectedExpression: MacExampleExpression = .neutral
+    @State private var selectedMotion: MacExampleMotion = .none
     @State private var hasShownSceneKit = false
     @State private var hasShownRealityKit = true
 
@@ -46,6 +47,13 @@ struct ContentView: View {
                     }
                 }
                 .pickerStyle(.segmented)
+
+                Picker("Motion", selection: $selectedMotion) {
+                    ForEach(MacExampleMotion.allCases) { motion in
+                        Text(motion.displayName).tag(motion)
+                    }
+                }
+                .pickerStyle(.menu)
             }
             .padding([.top, .horizontal])
 
@@ -53,7 +61,9 @@ struct ContentView: View {
                 if hasShownSceneKit {
                     SceneKitRendererView(viewModel: sceneKitViewModel,
                                          selectedModel: selectedModel,
-                                         selectedExpression: selectedExpression)
+                                         selectedExpression: selectedExpression,
+                                         selectedMotion: selectedMotion,
+                                         isActive: selectedRenderer == .sceneKit)
                         .opacity(selectedRenderer == .sceneKit ? 1 : 0)
                         .allowsHitTesting(selectedRenderer == .sceneKit)
                         .zIndex(selectedRenderer == .sceneKit ? 1 : 0)
@@ -62,7 +72,9 @@ struct ContentView: View {
                 if hasShownRealityKit {
                     RealityKitRendererView(viewModel: realityKitViewModel,
                                            selectedModel: selectedModel,
-                                           selectedExpression: selectedExpression)
+                                           selectedExpression: selectedExpression,
+                                           selectedMotion: selectedMotion,
+                                           isActive: selectedRenderer == .realityKit)
                         .opacity(selectedRenderer == .realityKit ? 1 : 0)
                         .allowsHitTesting(selectedRenderer == .realityKit)
                         .zIndex(selectedRenderer == .realityKit ? 1 : 0)
@@ -85,6 +97,8 @@ private struct RealityKitRendererView: View {
     let viewModel: RealityKitContentViewModel
     let selectedModel: MacExampleModel
     let selectedExpression: MacExampleExpression
+    let selectedMotion: MacExampleMotion
+    let isActive: Bool
 
     var body: some View {
         RealityView { content in
@@ -93,16 +107,29 @@ private struct RealityKitRendererView: View {
         .background(Color.white)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .task(id: selectedModel) {
-            await viewModel.loadEntity(model: selectedModel, expression: selectedExpression, forceReload: true)
+            await viewModel.loadEntity(model: selectedModel,
+                                       expression: selectedExpression,
+                                       motion: selectedMotion,
+                                       forceReload: true)
+        }
+        .task(id: selectedMotion) {
+            await viewModel.setMotion(selectedMotion)
         }
         .onAppear {
             viewModel.resumeUpdates()
+        }
+        .onChange(of: isActive) { _, isActive in
+            if isActive {
+                viewModel.resumeUpdates()
+            }
         }
         .onChange(of: selectedExpression) { _, expression in
             viewModel.setExpression(expression)
         }
         .onReceive(viewModel.updateTimer) { _ in
-            viewModel.update()
+            if isActive {
+                viewModel.update()
+            }
         }
         .overlay(alignment: .bottomLeading) {
             if let errorMessage = viewModel.errorMessage {
@@ -116,21 +143,35 @@ private struct SceneKitRendererView: View {
     let viewModel: SceneKitContentViewModel
     let selectedModel: MacExampleModel
     let selectedExpression: MacExampleExpression
+    let selectedMotion: MacExampleMotion
+    let isActive: Bool
 
     var body: some View {
         SceneKitView(scene: viewModel.scene)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .task(id: selectedModel) {
-                await viewModel.loadScene(model: selectedModel, expression: selectedExpression)
+                await viewModel.loadScene(model: selectedModel,
+                                          expression: selectedExpression,
+                                          motion: selectedMotion)
+            }
+            .task(id: selectedMotion) {
+                await viewModel.setMotion(selectedMotion)
             }
             .onAppear {
                 viewModel.resumeUpdates()
+            }
+            .onChange(of: isActive) { _, isActive in
+                if isActive {
+                    viewModel.resumeUpdates()
+                }
             }
             .onChange(of: selectedExpression) { _, expression in
                 viewModel.setExpression(expression)
             }
             .onReceive(viewModel.updateTimer) { _ in
-                viewModel.update()
+                if isActive {
+                    viewModel.update()
+                }
             }
             .overlay(alignment: .bottomLeading) {
                 if let errorMessage = viewModel.errorMessage {
@@ -162,6 +203,9 @@ final class RealityKitContentViewModel {
     private var lastUpdateTime: Date?
     private var currentModel: MacExampleModel = .alicia
     private var currentExpression: MacExampleExpression = .neutral
+    private var currentMotion: MacExampleMotion = .none
+    private var vrmaPlayer: VRMAPlayer?
+    private var vrmaRetargetingContext: VRMARetargetingContext?
     private var orbitDistance: Float = 2
     private var orbitTarget = SIMD3<Float>(0, 0.8, 0)
 
@@ -185,9 +229,10 @@ final class RealityKitContentViewModel {
     func loadEntity(
         model: MacExampleModel,
         expression: MacExampleExpression,
+        motion: MacExampleMotion,
         forceReload: Bool = false
     ) async {
-        if !forceReload, currentModel == model, let vrmEntity {
+        if !forceReload, currentModel == model, currentMotion == motion, let vrmEntity {
             apply(expression, to: vrmEntity)
             currentExpression = expression
             resumeUpdates()
@@ -212,41 +257,61 @@ final class RealityKitContentViewModel {
             normalizeScale(for: nextVRMEntity.entity)
             updateCameraTransform()
 
-            let neck = nextVRMEntity.humanoid.node(for: .neck)
-            let leftArm: Entity?
-            let rightArm: Entity?
-            switch nextVRMEntity.vrm {
-            case .v1:
-                leftArm = nextVRMEntity.humanoid.node(for: .leftShoulder)
-                rightArm = nextVRMEntity.humanoid.node(for: .rightShoulder)
-            case .v0:
-                leftArm = nextVRMEntity.humanoid.node(for: .leftUpperArm)
-                rightArm = nextVRMEntity.humanoid.node(for: .rightUpperArm)
-            }
-
-            let neckRotation = simd_quatf(angle: 20 * .pi / 180, axis: SIMD3<Float>(0, 0, 1))
-            let armRotation = simd_quatf(angle: 40 * .pi / 180, axis: SIMD3<Float>(0, 0, 1))
-            if let neck {
-                neck.transform.rotation = neck.transform.rotation * neckRotation
-            }
-            if let leftArm {
-                leftArm.transform.rotation = leftArm.transform.rotation * armRotation
-            }
-            if let rightArm {
-                rightArm.transform.rotation = rightArm.transform.rotation * armRotation
-            }
             apply(expression, to: nextVRMEntity)
+            if motion == .none {
+                applyPose(to: nextVRMEntity)
+                vrmaPlayer = nil
+                vrmaRetargetingContext = nil
+            } else {
+                loadMotion(motion, for: nextVRMEntity)
+            }
 
             let previousVRMEntity = self.vrmEntity
             self.vrmEntity = nextVRMEntity
             previousVRMEntity?.entity.removeFromParent()
             self.currentModel = model
             self.currentExpression = expression
+            self.currentMotion = motion
             self.time = 0
             resumeUpdates()
         } catch {
             errorMessage = error.localizedDescription
             print("VRM Load Error: \(error)")
+        }
+    }
+
+    func setMotion(_ motion: MacExampleMotion) async {
+        guard motion != currentMotion else { return }
+        await loadEntity(model: currentModel,
+                         expression: currentExpression,
+                         motion: motion,
+                         forceReload: true)
+    }
+
+    private func loadMotion(_ motion: MacExampleMotion, for vrmEntity: VRMEntity) {
+        guard motion != .none else {
+            vrmaPlayer = nil
+            vrmaRetargetingContext = nil
+            return
+        }
+        do {
+            guard let url = Bundle.main.url(forResource: motion.rawValue,
+                                            withExtension: "vrma",
+                                            subdirectory: "VRMA") else {
+                throw URLError(.fileDoesNotExist)
+            }
+            let loader = VRMAAnimationLoader()
+            let vrma = try loader.load(withURL: url)
+            let clip = try loader.loadClip(from: vrma)
+            vrmaRetargetingContext = vrmEntity.makeVRMARetargetingContext(for: clip)
+            vrmaPlayer = VRMAPlayer(clip: clip, isPlaying: true, isLooping: true, playbackSpeed: 1.0)
+            if let sample = vrmaPlayer?.sample {
+                vrmEntity.apply(vrmaSample: sample, retargetingContext: vrmaRetargetingContext)
+            }
+        } catch {
+            print("VRMA load error: \(error)")
+            vrmaPlayer = nil
+            vrmaRetargetingContext = nil
         }
     }
 
@@ -280,9 +345,42 @@ final class RealityKitContentViewModel {
             angle = -0.5 + 0.5 * progress
         }
 
-        vrmEntity.entity.transform.rotation = simd_quatf(angle: currentModel.initialRotation + angle,
+        if var player = vrmaPlayer {
+            let sample = player.update(deltaTime: Float(deltaTime))
+            vrmaPlayer = player
+            vrmEntity.apply(vrmaSample: sample, retargetingContext: vrmaRetargetingContext)
+        }
+
+        let rootAngle = currentMotion == .none ? currentModel.initialRotation + angle : currentModel.initialRotation
+        vrmEntity.entity.transform.rotation = simd_quatf(angle: rootAngle,
                                                          axis: SIMD3<Float>(0, 1, 0))
         vrmEntity.update(at: time)
+    }
+
+    private func applyPose(to vrmEntity: VRMEntity) {
+        let neck = vrmEntity.humanoid.node(for: .neck)
+        let leftArm: Entity?
+        let rightArm: Entity?
+        switch vrmEntity.vrm {
+        case .v1:
+            leftArm = vrmEntity.humanoid.node(for: .leftShoulder)
+            rightArm = vrmEntity.humanoid.node(for: .rightShoulder)
+        case .v0:
+            leftArm = vrmEntity.humanoid.node(for: .leftUpperArm)
+            rightArm = vrmEntity.humanoid.node(for: .rightUpperArm)
+        }
+
+        let neckRotation = simd_quatf(angle: 20 * .pi / 180, axis: SIMD3<Float>(0, 0, 1))
+        let armRotation = simd_quatf(angle: 40 * .pi / 180, axis: SIMD3<Float>(0, 0, 1))
+        if let neck {
+            neck.transform.rotation = neck.transform.rotation * neckRotation
+        }
+        if let leftArm {
+            leftArm.transform.rotation = leftArm.transform.rotation * armRotation
+        }
+        if let rightArm {
+            rightArm.transform.rotation = rightArm.transform.rotation * armRotation
+        }
     }
 
     private func setUpLight() {
@@ -368,11 +466,14 @@ final class SceneKitContentViewModel {
     private var lastUpdateTime: Date?
     private var currentModel: MacExampleModel = .alicia
     private var currentExpression: MacExampleExpression = .neutral
+    private var currentMotion: MacExampleMotion = .none
+    private var vrmaPlayer: VRMAPlayer?
+    private var vrmaRetargetingContext: VRMARetargetingContext?
 
     let updateTimer = Timer.publish(every: 1.0 / 60.0, on: .main, in: .common).autoconnect()
 
-    func loadScene(model: MacExampleModel, expression: MacExampleExpression) async {
-        if currentModel == model, let vrmNode {
+    func loadScene(model: MacExampleModel, expression: MacExampleExpression, motion: MacExampleMotion) async {
+        if currentModel == model, currentMotion == motion, let vrmNode {
             apply(expression, to: vrmNode)
             currentExpression = expression
             resumeUpdates()
@@ -392,18 +493,59 @@ final class SceneKitContentViewModel {
             let node = scene.vrmNode
             node.eulerAngles = SCNVector3(0, CGFloat(model.initialRotation), 0)
             node.setMToonLightDirection(MacExampleLighting.direction)
-            applyPose(to: node)
             apply(expression, to: node)
+            if motion == .none {
+                applyPose(to: node)
+                vrmaPlayer = nil
+                vrmaRetargetingContext = nil
+            } else {
+                loadMotion(motion, for: node)
+            }
 
             self.scene = scene
             self.vrmNode = node
             self.currentModel = model
             self.currentExpression = expression
+            self.currentMotion = motion
             self.time = 0
             resumeUpdates()
         } catch {
             errorMessage = error.localizedDescription
             print("VRM Load Error: \(error)")
+        }
+    }
+
+    func setMotion(_ motion: MacExampleMotion) async {
+        guard motion != currentMotion else { return }
+        await loadScene(model: currentModel,
+                        expression: currentExpression,
+                        motion: motion)
+    }
+
+    private func loadMotion(_ motion: MacExampleMotion, for vrmNode: VRMNode) {
+        guard motion != .none else {
+            vrmaPlayer = nil
+            vrmaRetargetingContext = nil
+            return
+        }
+        do {
+            guard let url = Bundle.main.url(forResource: motion.rawValue,
+                                            withExtension: "vrma",
+                                            subdirectory: "VRMA") else {
+                throw URLError(.fileDoesNotExist)
+            }
+            let loader = VRMAAnimationLoader()
+            let vrma = try loader.load(withURL: url)
+            let clip = try loader.loadClip(from: vrma)
+            vrmaRetargetingContext = vrmNode.makeVRMARetargetingContext(for: clip)
+            vrmaPlayer = VRMAPlayer(clip: clip, isPlaying: true, isLooping: true, playbackSpeed: 1.0)
+            if let sample = vrmaPlayer?.sample {
+                vrmNode.apply(vrmaSample: sample, retargetingContext: vrmaRetargetingContext)
+            }
+        } catch {
+            print("VRMA load error: \(error)")
+            vrmaPlayer = nil
+            vrmaRetargetingContext = nil
         }
     }
 
@@ -437,7 +579,14 @@ final class SceneKitContentViewModel {
             angle = -0.5 + 0.5 * progress
         }
 
-        vrmNode.eulerAngles = SCNVector3(0, CGFloat(currentModel.initialRotation + angle), 0)
+        if var player = vrmaPlayer {
+            let sample = player.update(deltaTime: Float(deltaTime))
+            vrmaPlayer = player
+            vrmNode.apply(vrmaSample: sample, retargetingContext: vrmaRetargetingContext)
+        }
+
+        let rootAngle = currentMotion == .none ? currentModel.initialRotation + angle : currentModel.initialRotation
+        vrmNode.eulerAngles = SCNVector3(0, CGFloat(rootAngle), 0)
         vrmNode.update(at: time)
     }
 

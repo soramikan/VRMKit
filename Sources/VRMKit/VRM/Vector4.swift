@@ -7,6 +7,10 @@ extension GLTF {
         public static var zero: Vector4 {
             return .init(x: 0, y: 0, z: 0, w: 0)
         }
+
+        public static var identity: Vector4 {
+            return .init(x: 0, y: 0, z: 0, w: 1)
+        }
     }
 }
 

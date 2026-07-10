@@ -1,0 +1,10 @@
+VRMA Test Fixtures
+
+Source: fm_vrma_motion_pack_01 distributed on BOOTH
+URL: https://booth.pm/ja/items/5527394
+License: CC0 / public domain
+
+The included files are used as-is for parser and sampling tests in VRMKit.
+They are copied from the local CC0 pack with the missing
+extensions.VRMC_vrm_animation.specVersion field set to "1.0" so the fixtures
+exercise strict VRMC_vrm_animation 1.0 loading.
